@@ -40,11 +40,11 @@ Servo exitServo;
 
 //=================상수==================
 //차단기 각도
-const int GATE_OPEN=90;
-const int GATE_CLOSE=180;
+const int GATE_OPEN=90;//90
+const int GATE_CLOSE=180;//180
 
 // 차량 접근 판단 거리
-const float VEHICLE_DISTANCE = 6.0;
+const float VEHICLE_DISTANCE = 10.0;
 
 // 차단기 열린 상태 유지 시간
 const unsigned long GATE_OPEN_TIME = 10000;
@@ -72,6 +72,9 @@ unsigned long exitGateOpenTime = 0;
 
 bool enterVehicleDetected = false;
 bool exitVehicleDetected = false;
+
+// 출차 통과 상태변수
+bool exitPassing=false;
 
 //==============Setup===============
 void setup() {
@@ -171,7 +174,8 @@ void updateParkingStatus(){
 //---------------------------------------
 void checkEntering(){
   // 접근 감지하는 초음파 센서
-  float distance=getDistance(TRIG_1,ECHO_1);
+  //float distance=getDistance(TRIG_1,ECHO_1);
+  float distance=getStableDistance(TRIG_1,ECHO_1);
 
   if(distance<=VEHICLE_DISTANCE){ //차량 접근 시
     if(!enterVehicleDetected){//새롭게 감지된 차량이면
@@ -202,7 +206,8 @@ void checkEntering(){
 //---------------------------------------
 void checkExiting(){
   // 접근 감지하는 초음파 센서
-  float distance=getDistance(TRIG_2,ECHO_2);
+  //float distance=getDistance(TRIG_2,ECHO_2);
+  float distance=getStableDistance(TRIG_2,ECHO_2);
 
   if(distance<=VEHICLE_DISTANCE){ //차량 접근 시
     if(!exitVehicleDetected){//새롭게 감지된 차량이면
@@ -256,6 +261,21 @@ float getDistance(int trig,int echo){
 
   float distance=duration*0.034/2;
   return distance;
+}
+
+float getStableDistance(int trig,int echo){
+  float sum=0;
+  int validCount=0;
+  for(int i=0;i<3;i++){
+    float d=getDistance(trig,echo);
+    if(d!=999&&d>=2&&d<=200){
+      sum+=d;
+      validCount++;
+    }
+    delay(10);
+  }
+  if(validCount==0){return 999;}
+  return sum/validCount;
 }
 
 //---------------------------------------
@@ -394,7 +414,26 @@ void openExitGate(){
   exitServo.write(GATE_OPEN); //현 그림 기준으로 90도에서 열림
   exitGateOpened=true;
   exitGateOpenTime=millis();
+  // 차량 통과 추적 시작
+  exitPassing=false;
   sendEvent("EXIT_GATE_OPEN");
+}
+
+//---------------------------------------
+// 3-3 차단기 폐쇄 (입/출)
+//---------------------------------------
+void closeEnterGate(){
+  if(!enterGateOpened){return;}
+  enterServo.write(GATE_CLOSE); //현 그림 기준으로 90도에서 열림
+  enterGateOpened=false;
+  sendEvent("ENTRY_GATE_CLOSED");
+}
+
+void closeExitGate(){
+  if(!exitGateOpened){return;}
+  exitServo.write(GATE_CLOSE); //현 그림 기준으로 90도에서 열림
+  exitGateOpened=false;
+  sendEvent("EXIT_GATE_CLOSED");
 }
 
 
@@ -417,14 +456,31 @@ void controlEnterGate(){
 //---------------------------------------
 void controlExitGate(){
   if (!exitGateOpened) {return;}
-  if(exitGateOpened){ //차단기가 열린 상태이면
-    if(millis()-exitGateOpenTime>=GATE_OPEN_TIME){    //일정시간 경과시
-      exitServo.write(GATE_CLOSE);                 // 출입게이트를 닫음
-      exitGateOpened=false;                           // 게이트가 닫혔다고 ~
-      sendEvent("EXIT_GATE_CLOSED");
-      sendEvent("EXIT_COMPLETE");
-    }
+  float distance=getStableDistance(TRIG_2,ECHO_2);
+
+  // 1. 차량이 아직 출구 센서 앞에 있음
+  if(distance<=VEHICLE_DISTANCE){
+    exitPassing=true;
   }
+
+  // 2. 한번 차량을 확인했고 이후 센서 영역에서 사라짐
+  if(exitPassing && distance>VEHICLE_DISTANCE){
+    closeExitGate();
+    sendEvent("EXIT_COMPLETE");
+    exitVehicleDetected=false;
+    exitPassing=false;
+    return;
+  }
+
+  // 3. 센서가 이상하거나 차량이 계속 머물러있으면 기본 10초 timeout 사용
+  //if(exitGateOpened){
+  if(millis()-exitGateOpenTime>=GATE_OPEN_TIME){    //일정시간 경과시
+    closeExitGate();                 // 출입게이트를 닫음
+    sendEvent("EXIT_TIMEOUT");
+    exitVehicleDetected=false;
+    exitPassing=false;
+  }
+  //}
 }
 
 //---------------------------------------
@@ -453,8 +509,13 @@ void checkParkingResult(){
           digitalWrite(LED_1, LOW);              // 모든 LED 를 끄기
           digitalWrite(LED_2, LOW);
           digitalWrite(LED_3, LOW);
+
+          // 주차 완료 시 즉시 입구 차단기 닫기
+          closeEnterGate();
+
           assignedSlot=-1;     // 할당슬롯 초기화
           wrongSlot=-1;
+
           sendParkingStatus(); // 주차 상황을 공유}
         }
 
