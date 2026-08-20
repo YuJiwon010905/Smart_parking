@@ -1,0 +1,4152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!--
+  🔴 판본 표지 — **이 줄을 지우지 마라.** (REQ-0240 · 2026-08-19)
+  까닭: 서버는 `srv_id` 를 주는데 **화면에는 그런 것이 없어서** :9900 이 08-17 사본을
+  이틀간 내주는 것을 아무도 못 봤다. `serve_file()` 은 cwd 상대경로로 열기 때문에
+  **서버를 어느 디렉터리에서 띄웠는가**가 곧 어느 화면이 나가는가다(원장 §5.85).
+
+  content 값의 뜻:
+    __UNSTAMPED__            저장소 원본 그대로다(배포 도구를 안 거쳤다)
+    src=<sha12> git=<short> at=<시각>   web/tools/deploy-screen.mjs 가 찍은 배포본이다
+
+  ⚠ `src=` 는 **이 meta 의 content 를 `__UNSTAMPED__` 로 되돌린 뒤** 잰 sha256 이다.
+  자기 자신을 포함해서 재면 값이 자기를 바꿔 영원히 안 맞는다 — 그래서 정규화 후에 잰다.
+  판정: `web/tools/deploy-screen.mjs --check`
+-->
+<meta name="screen-build" content="src=6b2461ca7f58 git=b9d501c+dirty at=2026-08-20T07:32:27">
+<title>주차 관제 — 실시간 자리 현황</title>
+<!--
+  주차 관제 데모 (단일 파일 · 외부 의존성 없음)
+  근거 명세: docs/net/parking-protocol.md v1 (얼림)
+    §1   자리 ID / 인덱스 순서            §1.1 occupied×reserved 4조합
+    §5.3 서버→브라우저 snapshot / ack / error
+    §5.4 브라우저→서버 reserve / cancel
+    §8   예약 시퀀스와 낙관적 UI 롤백      §9.1 data_log.json 형태
+  명세와 이 파일이 어긋나면 명세가 이긴다.
+-->
+<style>
+  :root {
+    --bg:          #eef1f6;
+    --panel:       #ffffff;
+    --ink:         #1c2431;
+    --ink-dim:     #5c6779;
+    --line:        #d9dfe8;
+    --accent:      #2f6fed;
+
+    --free-bg:     #ffffff;
+    --free-line:   #22a06b;
+    --free-ink:    #14764d;
+
+    --resv-bg:     #fff8e6;
+    --resv-line:   #d99408;
+    --resv-ink:    #8a5d00;
+
+    --occ-bg:      #eceff4;
+    --occ-line:    #9aa4b4;
+    --occ-ink:     #55606f;
+
+    --done-bg:     #e8f3ff;
+    --done-line:   #2f6fed;
+    --done-ink:    #14448f;
+
+    --mine:        #7a3ff2;
+    --warn-bg:     #fdeaea;
+    --warn-line:   #d64545;
+    --warn-ink:    #9b2020;
+    --ok-ink:      #14764d;
+    --radius:      12px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #12161d;
+      --panel:     #1a2029;
+      --ink:       #e6ebf3;
+      --ink-dim:   #98a3b4;
+      --line:      #2b3441;
+      --accent:    #6c9bff;
+
+      --free-bg:   #16241d;
+      --free-line: #35c98a;
+      --free-ink:  #6fe0ae;
+
+      --resv-bg:   #2a2113;
+      --resv-line: #e0a83a;
+      --resv-ink:  #f3cd7c;
+
+      --occ-bg:    #202631;
+      --occ-line:  #59647a;
+      --occ-ink:   #9aa6b8;
+
+      --done-bg:   #16243d;
+      --done-line: #6c9bff;
+      --done-ink:  #a9c6ff;
+
+      --mine:      #b18cff;
+      --warn-bg:   #331a1a;
+      --warn-line: #e06a6a;
+      --warn-ink:  #ffb3b3;
+      --ok-ink:    #6fe0ae;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  /* display 를 지정하는 클래스가 [hidden] 을 이겨 버리는 사고를 막는다
+     (UA 의 [hidden]{display:none} 은 작성자 스타일보다 약하다) */
+  [hidden] { display: none !important; }
+
+  body {
+    margin: 0;
+    padding: 18px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+  }
+
+  .wrap { max-width: 1060px; margin: 0 auto; }
+
+  .topbar {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    align-items: flex-end; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .topbar h1 { margin: 0; font-size: 24px; letter-spacing: -0.4px; }
+  .topbar .sub { margin: 2px 0 0; color: var(--ink-dim); font-size: 13px; }
+  .topbar__status { text-align: right; font-size: 13px; }
+  .conn { margin: 0; display: flex; align-items: center; gap: 7px; justify-content: flex-end; font-weight: 600; }
+  .who  { margin: 2px 0 0; color: var(--ink-dim); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--occ-line); flex: none; }
+  .dot--live { background: var(--free-line); }
+  .dot--file { background: var(--resv-line); }
+  .dot--down { background: var(--warn-line); }
+  .dot--demo { background: var(--mine); }
+
+  .banner {
+    margin: 0 0 12px; padding: 10px 14px;
+    border-radius: var(--radius); font-size: 14px; font-weight: 600;
+    border: 1px solid transparent;
+  }
+  .banner--warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
+  /* 진단이 아니라 사실을 전할 때. 빨갛게 만들지 않는다 — 정상 상태를 오류로 보이게 하면
+     사용자가 진짜 경고까지 흘려보낸다. */
+  .banner--note { background: var(--bg); border-color: var(--line); color: var(--ink-dim); font-weight: 500; }
+  .banner--demo { background: var(--done-bg); border-color: var(--done-line); color: var(--done-ink); font-weight: 500; }
+
+  .demo-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+  .demo-tools button {
+    font: inherit; font-size: 12.5px; padding: 6px 11px; cursor: pointer;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px;
+  }
+  .demo-tools button:hover { border-color: var(--accent); color: var(--accent); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(230px, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 780px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  section h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-dim); }
+  .side h2 + * { margin-bottom: 18px; }
+
+  .grid-head {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+    margin-bottom: 8px; font-size: 12px; font-weight: 700;
+    color: var(--ink-dim); text-align: center; letter-spacing: 1px;
+  }
+
+  /* 전선 순서(A1..A5,B1..B5)를 DOM 순서로 유지한 채 열 우선으로 배치한다.
+     행 우선(기본 흐름)이면 A1|A2 / A3|A4 … 로 어긋난다. */
+  .grid {
+    list-style: none; margin: 0; padding: 0;
+    display: grid;
+    grid-template-rows: repeat(5, minmax(0, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .tile {
+    width: 100%; height: 100%; min-height: 74px;
+    display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+    column-gap: 10px; row-gap: 1px; align-items: center;
+    text-align: left; font: inherit; cursor: pointer;
+    padding: 10px 12px; border-radius: var(--radius);
+    border: 2px solid var(--occ-line); background: var(--occ-bg); color: var(--occ-ink);
+    transition: transform .08s ease, box-shadow .15s ease;
+  }
+  .tile:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .tile__id  { grid-row: 1 / span 2; font-size: 21px; font-weight: 800; letter-spacing: -.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .tile__state { font-size: 14px; font-weight: 700; }
+  .tile__meta  { font-size: 11.5px; opacity: .85; }
+
+  .tile[data-view="free"]     { background: var(--free-bg); border-color: var(--free-line); color: var(--free-ink); }
+  .tile[data-view="reserved"] { background: var(--resv-bg); border-color: var(--resv-line); color: var(--resv-ink); }
+  .tile[data-view="occupied"] { background: var(--occ-bg);  border-color: var(--occ-line);  color: var(--occ-ink); }
+  .tile[data-view="done"]     { background: var(--done-bg); border-color: var(--done-line); color: var(--done-ink); }
+  .tile[data-view="unknown"]  { background: var(--occ-bg);  border-color: var(--line); color: var(--ink-dim); border-style: dotted; }
+  .tile[data-view="pending"]  { border-style: dashed; border-color: var(--accent); color: var(--accent); background: var(--panel); animation: pulse 1.1s ease-in-out infinite; }
+  .tile[data-view="settled"]  { border-color: var(--free-line); color: var(--ok-ink); background: var(--free-bg); }
+
+  .tile[data-mine="1"] { box-shadow: inset 0 0 0 2px var(--mine); }
+  .tile[aria-disabled="true"] { cursor: not-allowed; }
+
+  /* ── 개정 격자 ─────────────────────────────────────────────────────────
+     `--zrows`/`--zcols` 는 **맵 정의에서 온다.** 🔴 CSS 에 5 를 박지 않는다(원장 §5.42). */
+  .zgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
+           grid-template-columns: repeat(var(--zcols, 1), minmax(0, 1fr)); }
+  /* 🔴 빈 칸 — **자리가 아니다.** 초점을 받지 않고 보조기술에서 숨는다.
+     `5×5` 에 자리 5 + 입출구면 빈 칸이 18개다 — 전부 탭 정지점이면 접근성 결함이다(설계서 §5.1). */
+  /* 🔴 "이어짐" — **빈 칸이 아니다.** 자리는 있는데 그 자리를 왼쪽 칸에서 이미 그린 것이다.
+     빈 칸과 같은 무늬로 그리면 **자리가 없는 것처럼 보인다.** */
+  .zcell--cont { border: 1px dashed var(--line); border-radius: 10px; min-height: 96px;
+                 background: color-mix(in srgb, var(--panel) 40%, transparent); }
+  .zcell--empty { border: 1px dashed transparent; background: repeating-linear-gradient(
+                    45deg, transparent 0 6px, rgba(127,127,127,.07) 6px 12px); border-radius: 10px; min-height: 96px; }
+  .zone { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; min-height: 96px;
+          border: 2px solid var(--occ-line); border-radius: 10px;
+          background: var(--occ-bg); color: var(--occ-ink); }
+  .zone[data-usable="0"] { border-style: dotted; color: var(--ink-dim); }   /* 미상 자리 */
+  .zone__head { display: flex; align-items: baseline; gap: 6px; }
+  /* 표시 이름이 주(主), 날 id 는 부제. 🔴 **부제를 display:none 으로 감추지 마라** —
+     로그와 맞추는 유일한 값이고, 감추면 스크린리더에서도 사라진다. */
+  .zone__name { font-weight: 800; font-size: 14px; }
+  .zone__id   { font-weight: 800; font-family: ui-monospace, Menlo, monospace; }
+  .zone__name + .zone__id { font-weight: 600; font-size: 11px; opacity: .7; }
+  .zone__sum  { font-size: 13px; font-weight: 700; }
+  /* ── 노드 박스 (박스 안의 박스) — REQ-0261 ────────────────────────────
+     영역 박스 > **노드 박스** > 모듈 리스트. 한 영역에 노드가 여럿일 수 있다.
+     🔴 지금 지형은 영역당 1대라 1:1 로 보이지만 **곧 둘이 된다**(REQ-0260) — 층을 빼지 않는다. */
+  .znodes { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .znode  { border: 1px solid var(--line); border-radius: 7px; padding: 3px 6px 4px;
+            background: color-mix(in srgb, var(--panel) 62%, transparent); }
+  .znode__head  { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .znode__id    { font-family: ui-monospace, Menlo, monospace; font-weight: 800; font-size: 11.5px; }
+  .znode__count { font-size: 10.5px; opacity: .75; }
+  /* 🔴 모듈 0개는 조용한 정상이 아니다 — 점선으로 **비어 있음이 보이게** 둔다(§"빈 지형은 고장이다"). */
+  .znode--empty { border-style: dashed; font-size: 11px; color: var(--ink-dim); }
+
+  .zone__mods { list-style: none; margin: 2px 0 0; padding: 0; font-size: 11.5px; }
+  .zmod { display: flex; flex-direction: column; gap: 2px; }
+  .zmod__head { display: flex; align-items: center; gap: 6px; }
+  /* 모듈 이름이 남는 자리를 먹고 값(●/○)은 오른쪽 끝에 붙는다 — 등·이름·값 세 칸이 안 흔들린다. */
+  .zmod__head > :nth-child(2) { flex: 1 1 auto; min-width: 0; }
+
+  /* ── 모듈 조작 (SPEC-web-control) ─────────────────────────────
+     🔴 `control` 선언이 있는 모듈에만 이 블록이 존재한다. 없으면 DOM 에도 없다. */
+  .zctl { margin: 1px 0 4px 1.4em; padding: 3px 5px; border-left: 2px solid var(--line); }
+  .zctl__row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .zctl__label { font-size: 10.5px; opacity: .8; }
+  .zctl__btn { font: inherit; font-size: 11px; padding: 1px 7px; border-radius: 6px; cursor: pointer;
+               border: 1px solid var(--line); background: var(--panel); color: inherit; }
+  .zctl__btn[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
+  /* 연습 단추 — 범위를 안 보고 보낸다. **눈에 다르게 보여야 실수로 안 쓴다.** */
+  .zctl__btn--warn { border-color: #c9a227; }
+  .zctl__num { font: inherit; font-size: 11px; width: 9ch; padding: 1px 4px;
+               border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; }
+  .zctl__hint { font-size: 10px; opacity: .65; }
+  .zctl__prac { margin-top: 2px; }
+  .zctl__prac > summary { font-size: 10px; opacity: .65; cursor: pointer; }
+  /* 🔴 상태 줄 — 색만으로 뜻을 나르지 않는다. 문구가 이미 뜻을 말하고 색은 거드는 것이다. */
+  .zctl__msg { font-size: 10.5px; margin-top: 2px; }
+  .zctl__msg[data-kind="ok"]   { color: #1a8f3c; }
+  .zctl__msg[data-kind="bad"]  { color: #c62828; }
+  .zctl__msg[data-kind="warn"] { color: #a06800; }
+  .zctl__msg[data-kind="wait"] { color: var(--ink-dim); }
+
+  /* 🔴 **동작 상태등 — 셋.** 색만으로 뜻을 나르지 않는다(색각 이상·스크린리더):
+     도형이 다르고(● ▲ ○) `aria-label` 에 문장이 붙는다. **모름을 녹/적으로 칠하지 않는다.** */
+  .zlamp { flex: 0 0 auto; font-size: 10px; line-height: 1; width: 1em; text-align: center; }
+  .zlamp[data-state="ok"]      { color: #1a8f3c; }
+  .zlamp[data-state="bad"]     { color: #c62828; }
+  .zlamp[data-state="unknown"] { color: var(--ink-dim); opacity: .8; }
+  /* 🔑 강조축 — **조작을 막는 것만 진하다.** 막지 않는 미상은 조용한 배경이다(원장 §5.33).
+     이 규칙 덕에 20~30개가 다 떠 있어도 눈에 걸리는 것은 막는 것뿐이다. */
+  .zmod[data-loud="0"] { opacity: .55; }
+  .zmod[data-loud="1"] { font-weight: 700; }
+  .zone__acts { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+  .zbtn { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 8px; cursor: pointer;
+          border: 1px solid var(--line); background: var(--panel); color: inherit; }
+  .zbtn[aria-disabled="true"] { cursor: not-allowed; opacity: .6; }
+  .zone__why { font-size: 11px; opacity: .9; }
+  .tile:not([aria-disabled="true"]):hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0,0,0,.12); }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .62; } }
+  @media (prefers-reduced-motion: reduce) { .tile { animation: none !important; transition: none; } }
+
+  .legend { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; font-size: 12px; color: var(--ink-dim); }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 13px; height: 13px; border-radius: 4px; border: 2px solid; flex: none; }
+  .swatch--free { background: var(--free-bg); border-color: var(--free-line); }
+  .swatch--resv { background: var(--resv-bg); border-color: var(--resv-line); }
+  .swatch--occ  { background: var(--occ-bg);  border-color: var(--occ-line); }
+  .swatch--done { background: var(--done-bg); border-color: var(--done-line); }
+  .swatch--mine { background: transparent;    border-color: var(--mine); }
+  .swatch--inject {
+    border-color: #c0392b; border-style: dashed;
+    background-image: repeating-linear-gradient(45deg, rgba(192,57,43,.5) 0 3px, rgba(192,57,43,0) 3px 6px);
+  }
+
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+  dt { color: var(--ink-dim); }
+  dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+  .messages { display: grid; gap: 6px; min-height: 24px; }
+  .msg { font-size: 13px; padding: 8px 10px; border-radius: 8px; border-left: 3px solid var(--line); background: var(--bg); }
+  .msg--ok   { border-left-color: var(--free-line); color: var(--ok-ink); }
+  .msg--err  { border-left-color: var(--warn-line); color: var(--warn-ink); }
+  .msg--info { border-left-color: var(--accent); }
+  .msg time { display: block; font-size: 11px; opacity: .7; }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); color: var(--ink);
+    padding: 20px; max-width: 340px; box-shadow: 0 18px 50px rgba(0,0,0,.28);
+  }
+  dialog::backdrop { background: rgba(8,12,20,.5); }
+  dialog h2 { margin: 0 0 8px; font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+  dialog p  { margin: 0 0 16px; font-size: 14px; color: var(--ink-dim); }
+  dialog menu { display: flex; gap: 8px; justify-content: flex-end; margin: 0; padding: 0; }
+  dialog button {
+    font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  dialog button[value="ok"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  dialog button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  footer { margin-top: 16px; font-size: 11.5px; color: var(--ink-dim); text-align: center; }
+
+  /* ── 테스트 모드 (§12A) ─────────────────────────────────────────
+     반전 구조의 사고는 "켠 줄 모르고 가짜 값을 실측으로 읽는 것"이다(§12A.6).
+     그래서 무장 중에는 화면 전체 테두리 + 배너 + 칸별 표시가 동시에 걸린다.
+     배지 하나로는 부족하다는 것이 명세의 요구다. */
+  .test-frame {
+    position: fixed; inset: 0; z-index: 90; pointer-events: none; display: none;
+    border: 9px solid transparent;
+    border-image: repeating-linear-gradient(45deg,
+      #c0392b 0 14px, #2b2b2b 14px 28px) 9;
+  }
+  body.is-armed .test-frame { display: block; }
+  body.is-armed { padding-bottom: 26px; }
+
+  .banner--test {
+    background: repeating-linear-gradient(45deg,
+      rgba(192,57,43,.14) 0 12px, rgba(192,57,43,.05) 12px 24px);
+    border-color: #c0392b; color: var(--warn-ink);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  .banner--test strong { font-size: 15px; }
+  .banner--test .banner__sub { font-weight: 500; font-size: 13px; opacity: .95; }
+
+  /* 주입된 칸: 4조합 색을 덮지 않고 빗금과 깃발을 겹친다(직교 축) */
+  .tile[data-injected="1"] {
+    background-image: repeating-linear-gradient(45deg,
+      rgba(192,57,43,.20) 0 7px, rgba(192,57,43,0) 7px 14px);
+    border-style: dashed;
+  }
+  .tile__flag {
+    grid-column: 2; justify-self: start;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .4px;
+    padding: 1px 6px; border-radius: 999px; margin-top: 2px;
+    background: #c0392b; color: #fff;
+  }
+  .tile__flag[hidden] { display: none; }
+
+  /* ── 신선도 (REQ-0067) ──────────────────────────────────────────
+     "마지막으로 받은 뒤로 확인된 바 없음"을 표시한다. 켜고 끄는 근거는 **브라우저 시계**다.
+
+     표시 축을 고르는 데 제약이 있었다. 이 파일에서
+       · 투명도(opacity) = "누를 수 없음"(.sim-btn / .inject button 의 aria-disabled)
+       · 파선 테두리     = 주입됨 / 요청 중,  점선 테두리 = 상태 미상
+     이미 다 쓰고 있어서, 거기에 얹으면 뜻이 겹친다. 그래서 남은 **채도** 축을 쓴다 —
+     격자 전체가 회색이 되는 것은 "얼어붙은 화면"이라는 뜻으로 읽히고,
+     4조합 색 구분은 문구(사용 중 / 빈 자리 …)가 이미 따로 지고 있다(색만으로 구분하지 않는다).
+
+     ⚠ 알고 받아들인 부작용: 무장 중이면 빨간 빗금도 같이 탈색된다.
+        다만 그때는 화면 테두리(.test-frame)와 배너가 격자 밖에서 그대로 빨갛게 남는다. */
+  body.is-stale #grid { filter: grayscale(.82); }
+
+  .tile__stale {
+    grid-column: 2; justify-self: start;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .3px;
+    padding: 1px 6px; border-radius: 999px; margin-top: 2px;
+    background: var(--ink); color: var(--panel);
+  }
+  .tile__stale[hidden] { display: none; }
+
+  /* 진단이 아니라 사실을 말하는 배너다 — 조용한 주차장에서도 켜진다(§5.3 은 변화가 있을 때만 push).
+     그래서 빨강(경고)이 아니라 중립색이고, 대신 왼쪽 굵은 띠로 존재감만 준다. */
+  .banner--stale {
+    background: var(--bg); color: var(--ink);
+    border-color: var(--line); border-left: 5px solid var(--ink-dim);
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  }
+  .banner--stale .banner__sub { font-weight: 500; font-size: 13px; color: var(--ink-dim); }
+
+  .swatch--stale { background: var(--occ-bg); border-color: var(--ink-dim); filter: grayscale(1); }
+
+  .inject { display: none; gap: 4px; }
+  body.is-armed .inject { display: flex; }
+  .inject button {
+    flex: 1; font: inherit; font-size: 11px; font-weight: 700; padding: 4px 2px;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: var(--panel); color: var(--ink-dim); cursor: pointer;
+  }
+  .inject button:hover { border-color: #c0392b; color: #c0392b; }
+  .inject button[aria-pressed="true"] { background: #c0392b; border-color: #c0392b; color: #fff; }
+  .inject button[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+  .inject button:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+
+  .slot { display: flex; flex-direction: column; gap: 5px; }
+  .slot .tile { flex: 1; }
+
+  /* 시뮬레이션 패널 — 테스트 모드와 **다른 것**이라는 사실이 색과 형태에서 먼저 읽혀야 한다(§12B.3).
+     테스트 모드는 빨강(위험·경고) 계열, 시뮬은 파랑(평상시 도구) 계열로 갈랐다. */
+  .sim-panel {
+    display: grid; gap: 8px; font-size: 13px;
+    padding: 12px; margin-bottom: 6px;
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 10px; background: var(--bg);
+  }
+  .sim-btn {
+    font: inherit; font-weight: 700; font-size: 14px; padding: 10px 12px;
+    border-radius: 9px; cursor: pointer;
+    border: 2px solid var(--accent); background: var(--accent); color: #fff;
+  }
+  .sim-btn:hover { filter: brightness(1.08); }
+  .sim-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+  .sim-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .sim-outcome { margin: 0; font-size: 12.5px; font-weight: 700; }
+  .sim-outcome[data-level="ok"]   { color: var(--ok-ink); }
+  .sim-outcome[data-level="none"] { color: var(--resv-ink); }
+  .sim-outcome[data-level="err"]  { color: var(--warn-ink); }
+
+  .test-panel { display: grid; gap: 8px; font-size: 13px; }
+  .test-panel__state { font-weight: 700; }
+  .test-panel__state[data-armed="1"] { color: #c0392b; }
+  .test-panel__state[data-armed="0"] { color: var(--ok-ink); }
+  .test-panel__state[data-armed="?"] { color: var(--ink-dim); }
+  .test-toggle {
+    font: inherit; font-weight: 700; padding: 9px 12px; border-radius: 9px; cursor: pointer;
+    border: 2px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  .test-toggle[aria-pressed="true"] { background: #c0392b; border-color: #c0392b; color: #fff; }
+  .test-toggle[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+  .test-toggle:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .test-note { font-size: 11.5px; color: var(--ink-dim); margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="topbar__title">
+      <h1>주차 관제</h1>
+      <p class="sub">2열 5행 · 10칸 · 빈자리를 눌러 예약합니다</p>
+    </div>
+    <div class="topbar__status">
+      <p id="conn-status" class="conn" role="status" aria-live="polite">
+        <span class="dot" id="conn-dot" aria-hidden="true"></span>
+        <span id="conn-text">연결 준비 중…</span>
+      </p>
+      <p class="who">내 사용자 ID <span id="user-id" class="mono">-</span></p>
+    </div>
+  </header>
+
+  <p id="demo-banner" class="banner banner--demo" hidden></p>
+  <div id="demo-tools" class="demo-tools" hidden></div>
+  <p id="offline-banner" class="banner banner--warn" hidden></p>
+  <!-- 신선도 배너(REQ-0067). 서버 메시지가 아니라 **브라우저 시계**가 켜고 끈다.
+       문구는 임계를 넘나들 때만 바뀐다 — 초 단위 숫자를 aria-live 안에 넣으면
+       스크린리더가 1초마다 다시 읽는다. 흐르는 숫자는 '마지막 갱신'(비-live)에 둔다. -->
+  <p id="stale-banner" class="banner banner--stale" role="status" aria-live="polite" hidden></p>
+  <p id="test-banner" class="banner banner--test" role="status" aria-live="polite" hidden></p>
+  <!-- 자리 데이터 결손(2026-08-16). 칸마다 "상태 미상 / 데이터 없음"이라고 이미 말하지만,
+       그건 **칸을 하나씩 읽는 사람**에게만 들린다. 10칸 중 3칸만 조용히 미상이면
+       나머지 7칸이 정상이라 화면 전체는 멀쩡해 보인다 — 시연에서 발표자가 못 알아챈다.
+       그래서 "몇 칸이 왜 미상인가"를 격자 위에서 한 번 더 말한다. -->
+  <p id="slots-banner" class="banner banner--warn" role="status" aria-live="polite" hidden></p>
+
+  <main>
+    <section aria-labelledby="grid-title">
+      <h2 id="grid-title">자리 현황</h2>
+      <div class="grid-head" id="grid-head" aria-hidden="true"><span>열 A</span><span>열 B</span></div>
+      <ul id="grid" class="grid" role="list"></ul>
+
+      <!-- 개정 격자(맵 정의 기반). 🔴 **옛 격자를 지우지 않는다** — 서버가 `map` 을 보내기 시작할
+           때까지 옛 경로가 화면을 그린다. `map` 이 오면 이쪽이 켜지고 위가 숨는다. -->
+      <ul id="zone-grid" class="zgrid" role="list" hidden></ul>
+
+      <ul class="legend" role="list">
+        <li><span class="swatch swatch--free" aria-hidden="true"></span>빈 자리 (occupied 0 · reserved 0) — 눌러서 예약</li>
+        <li><span class="swatch swatch--resv" aria-hidden="true"></span>예약됨, 차는 아직 (0 · 1)</li>
+        <li><span class="swatch swatch--occ"  aria-hidden="true"></span>예약 없이 주차됨 (1 · 0)</li>
+        <li><span class="swatch swatch--done" aria-hidden="true"></span>예약한 자리에 입차 완료 (1 · 1) — 정상 완료</li>
+        <li><span class="swatch swatch--mine" aria-hidden="true"></span>보라 테두리 = 내 예약</li>
+        <li><span class="swatch swatch--inject" aria-hidden="true"></span>빨간 빗금 + ⚑주입값 = 테스트 모드로 주입된 가짜 점유값</li>
+        <li><span class="swatch swatch--stale" aria-hidden="true"></span>격자 전체가 흐려지고 ⏱ 표시 = 그 값을 받은 뒤로 <strong>확인된 바 없음</strong> (지금 값이 아닐 수 있음)</li>
+      </ul>
+    </section>
+
+    <section class="side" aria-labelledby="side-title">
+      <h2 id="side-title">장치 상태</h2>
+      <dl>
+        <dt>센서</dt>      <dd id="dev-online">-</dd>
+        <!-- §9.1 개정 9(REQ-0070) — "센서" 한 줄의 **근거**다. 끊김이라고 말했으면
+             언제부터인지도 같이 보여야 한다. 흐르는 숫자를 여기 두는 이유는 이 dd 가
+             aria-live 가 아니기 때문이다(배너는 live 라 매초 못 바꾼다). -->
+        <dt>마지막 프레임</dt><dd id="dev-frame">-</dd>
+        <dt>장치 ID</dt>   <dd id="dev-id" class="mono">-</dd>
+        <dt>가동시간</dt>  <dd id="dev-uptime">-</dd>
+        <dt>seq</dt>       <dd id="dev-seq" class="mono">-</dd>
+        <dt>데이터 경로</dt><dd id="dev-source">-</dd>
+        <dt>마지막 갱신</dt><dd id="dev-age">-</dd>
+      </dl>
+
+      <h2 id="sim-title">시뮬레이션</h2>
+      <div class="sim-panel">
+        <button id="sim-step" type="button" class="sim-btn">▶ 한 걸음 진행</button>
+        <p id="sim-outcome" class="sim-outcome" hidden></p>
+        <p id="sim-hint" class="test-note"></p>
+        <p class="test-note">
+          누를 때마다 <strong>자리 하나만</strong> 바뀝니다. 예약된 빈 칸이 있으면 그 칸부터 채웁니다(§12B.2).
+          <br><strong>테스트 모드와 무관합니다</strong> — 무장하지 않아도 되고, 이 버튼으로 바뀐 값에는
+          주입 표시가 붙지 않습니다.
+        </p>
+      </div>
+
+      <h2 id="test-title">테스트 모드</h2>
+      <div class="test-panel">
+        <button id="test-toggle" type="button" class="test-toggle" aria-pressed="false">테스트 모드 켜기</button>
+        <p id="test-state" class="test-panel__state" data-armed="0">해제됨</p>
+        <p id="test-hint" class="test-note"></p>
+        <p class="test-note">
+          센서가 없는 동안 <strong>이 화면이 점유값을 주입</strong>합니다(§12A). 무장하면 칸마다
+          빈자리/주차/원래대로 버튼이 생깁니다. 예약 상태는 주입 대상이 아닙니다 — 정상 예약 경로로 만드세요.
+        </p>
+      </div>
+
+      <h2 id="msg-title">알림</h2>
+      <div id="messages" class="messages" role="status" aria-live="polite" aria-labelledby="msg-title"></div>
+    </section>
+  </main>
+
+  <!-- WS 주소를 여기에 **하드코딩하지 마라.** 운영과 시험 인스턴스가 같이 도는 동안
+       "지금 어느 서버를 보고 있나"는 화면이 답해야 한다. boot() 이 실제 대상으로 채운다. -->
+  <footer>docs/net/parking-protocol.md v1.2 기준 · WebSocket <span class="mono" id="foot-ws">…</span> · 폴백 <span class="mono">data_log.json</span>
+    <!-- 🔴 **화면 판본을 화면에 찍는다.** 파일 안(meta)에만 있으면 사람이 안 본다 —
+         `dev_server` 사본은 운영보다 낡을 수 있고, **낡았을 때 조용하면 안 된다**(루트 지시).
+         ⚠ 경고까지는 안 한다. 서버 판본과 비교해 빨갛게 만들면 **개발에 방해가 된다** —
+         화면은 *"내가 무엇인지"* 만 말하고 **판단은 사람에게 남긴다.** -->
+    · 화면 <span class="mono" id="foot-build">…</span></footer>
+</div>
+
+<div class="test-frame" aria-hidden="true"></div>
+
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title">예약하시겠습니까?</h2>
+    <p id="confirm-body"></p>
+    <menu>
+      <button value="cancel" type="submit">닫기</button>
+      <button value="ok" type="submit" autofocus>확인</button>
+    </menu>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+
+/* ────────────────────────────────────────────────────────────────
+   0. 상수 — 명세에서 그대로 온 값들
+   ──────────────────────────────────────────────────────────────── */
+
+/** §1 전선 인덱스 0..9. 이 순서는 어디서도 뒤집지 않는다. */
+const SLOT_IDS = ['A1', 'A2', 'A3', 'A4', 'A5', 'B1', 'B2', 'B3', 'B4', 'B5'];
+
+/**
+ * **명세상의 기본 포트**일 뿐, 실제 접속 포트가 아니다. 실제 포트는 `resolveWsPort()` 가 정한다.
+ *
+ * 왜 상수를 그대로 쓰면 안 되는가 (2026-08-16 실측으로 드러난 결함):
+ * 서버는 **HTTP 와 WS 가 같은 리스너 하나**다 — `index.html` 서빙과 `/ws` 업그레이드를 겸한다
+ * (`server.cpp` 의 `lsn_http = listen_on(PORT_HTTP + g_port_offset)`).
+ * 그래서 `--port-offset=100` 인 시험 인스턴스에서는 **페이지도 WS 도 10000** 에 있다.
+ * 그런데 이 화면은 호스트만 `location` 에서 가져오고 포트는 이 상수를 썼다. 결과:
+ *
+ *   시험 서버(:10000)가 준 페이지 → WebSocket 은 **운영 서버(:9900)** 로 붙는다.
+ *   폴백 폴링만 상대경로라 :10000 으로 간다. → 한 화면이 **두 서버를 섞어서** 그리고,
+ *   거기서 예약을 누르면 **운영 장치로 하행 명령이 내려간다.**
+ *
+ * 그래서 기준을 "상수"에서 "이 페이지를 준 서버"로 바꿨다. 아래 `resolveWsPort()` 참조.
+ */
+const WS_PORT_DEFAULT = 9900;
+const WS_PATH      = '/ws';
+const LOG_FILE     = 'data_log.json';
+const POLL_MS      = 3000;    // 폴백 폴링 주기
+
+/**
+ * 이 페이지가 붙어야 할 WS 포트를 정한다. (상수가 아니라 함수인 이유는 위 WS_PORT_DEFAULT 주석)
+ *
+ * 우선순위와 근거:
+ *   1. `?ws=<포트>` — 명시적 지정. 페이지를 다른 정적 서버(예: Live Server 5500)로 열어
+ *      두고 관제 서버는 딴 데 있는 경우가 유일한 정당한 용도다.
+ *   2. `location.port` — **기본값.** 서버가 HTTP/WS 를 한 포트로 서빙하므로
+ *      "나를 준 서버" = "내가 붙을 서버" 다. 오프셋이 몇이든 저절로 맞는다.
+ *   3. `WS_PORT_DEFAULT` — 포트 없이 열린 경우(80/443)만. 문서화된 기본값을 보존한다.
+ *
+ * 반환 `{ port, from, bad }` — `from` 은 어디서 정해졌는지(화면에 띄운다),
+ * `bad` 는 무시된 잘못된 `?ws=` 값이고 **없으면 `null`** 이다. **잘못된 값을 조용히 무시하지
+ * 않는 이유**: 조용히 넘기면 사용자는 시험 인스턴스를 보고 있다고 믿는데 실제로는 운영 포트에 붙는다.
+ *
+ * ⚠ `bad` 의 없음은 `null` 로만 판단하라. 빈 문자열은 **실제로 올 수 있는 잘못된 값**이다
+ *   (`?ws=` 로 열면 값이 `''` 다). 참/거짓으로 검사하면 그 경우만 경고가 새어 나간다.
+ */
+function resolveWsPort() {
+  const raw = new URLSearchParams(window.location.search).get('ws');
+  if (raw !== null) {
+    const n = Number(raw);
+    if (String(raw).trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 65535) {
+      return { port: String(n), from: 'query', bad: null };
+    }
+    return wsPortFromPage(String(raw));   // 잘못된 값 → 기본 규칙으로 떨어지되 그 사실을 들고 간다
+  }
+  return wsPortFromPage(null);
+}
+
+function wsPortFromPage(bad) {
+  const p = window.location.port;
+  if (p) return { port: p, from: 'page', bad: bad };
+  return { port: String(WS_PORT_DEFAULT), from: 'default', bad: bad };
+}
+
+/** 실제로 열 WS URL. 화면 표시와 접속이 **같은 함수**를 쓰게 해서 둘이 어긋나지 않게 한다. */
+function wsTargetUrl() {
+  const host = window.location.hostname || 'localhost';
+  return 'ws://' + host + ':' + resolveWsPort().port + WS_PATH;
+}
+
+/**
+ * 폴백 fetch 한 번의 상한(REQ-0069). 이 시간을 넘기면 **끊고 실패로 보고한다.**
+ *
+ * 근거: 폴링 주기가 3초이므로 그보다는 넉넉해야 하고(느린 응답을 실패로 몰면 안 된다),
+ * §7.3 의 최종 실패 지평이 1500×3=4500ms 다 — **시스템이 이미 "그 요청은 잃었다"고 보는 시각**이다.
+ * 작은 정적 파일 한 개를 그보다 오래 끌고 있다면 느린 것이 아니라 매달린 것이다. 그래서 5초.
+ * 그리고 UNCONFIRMED_MS(12초)보다 작다 — 화면이 "확인된 바 없음"을 오래 띄우고 있기 전에
+ * "읽지 못했다"는 더 구체적인 말을 먼저 할 수 있어야 한다.
+ */
+const POLL_TIMEOUT_MS = 5000;
+/** 폴백 기록이 오래됐다고 볼 나이. **기준 시계는 `ts`(서버 시계)** 다. (§3.4 의 3.5초보다 넉넉히)
+    아래 UNCONFIRMED_MS 와 헷갈리지 마라 — 그쪽은 브라우저 시계로 잰 "수신 이후 경과"다. */
+const STALE_MS     = 10000;
+
+/**
+ * **마지막으로 스냅샷을 받은 시각(receivedAt · 브라우저 시계)** 으로부터 이만큼 지나면
+ * 화면은 그 값을 "지금 값"이라고 말하지 않는다.
+ *
+ * 왜 브라우저가 직접 재는가(REQ-0067): 서버가 '센서 끊김'을 알리는 유일한 경로가
+ * push 인데, 그 push 를 만들어 내는 판정(§3.4)이 고장 나면 **아무 말도 오지 않는다.**
+ * 그 침묵을 화면은 "변화 없음"으로 읽어 마지막 상태를 계속 진짜처럼 보여 준다.
+ * 서버가 말해 주지 않아도 드러나야 하므로, 근거를 서버 메시지가 아니라 **로컬 시계**에 둔다.
+ *
+ * 12초의 근거: 장치 하트비트는 1 Hz(§3.2), 서버는 3.5초 무프레임이면 online=false 를
+ * push 한다(§3.4). 정상 서버라면 장치가 조용해진 뒤 3.5초 안에 무슨 말이든 온다.
+ * 12초는 그 판정 시각의 약 3.4배 — 말할 기회를 충분히 주고도 아무 말이 없었다는 뜻이다.
+ *
+ * ⚠ 이 값이 넘었다는 것은 **고장의 증거가 아니다.** 조용한 주차장에서도 push 는 오지 않는다
+ * (§5.3 은 "변화가 있을 때" push 라고만 한다). 그래서 문구는 진단("끊겼다")이 아니라
+ * 사실("그 뒤로 확인되지 않았다")이어야 한다. 정상을 빨간 오류로 그리면 §12A.6 의
+ * 진짜 경고까지 같이 흘려보내게 된다.
+ */
+const UNCONFIRMED_MS = 12000;
+/** `get_map` 재청 최소 간격. 🔴 정합성용이 아니라 **내 쪽 무한 고리 차단용**이다. */
+const MAP_ASK_MIN_MS = 2000;
+/** 옛 판 프레임을 연속으로 몇 장까지 조용히 무시하나. 넘으면 **내 사본을 의심한다.**
+    🔑 값의 근거: 늦은 프레임은 보통 **한두 장**이다(재전송·순서 뒤바뀜). 셋이면 패턴이다. */
+const OLDER_RUN_MAX = 3;
+const ACK_TIMEOUT  = 6000;    // §7.3 서버 최종 실패가 1500×3=4500ms → 그보다 넉넉하게
+const SETTLE_MS    = 6000;    // "확정됨" 표시를 스냅샷 없이도 걷어내는 안전장치
+const BACKOFF_MIN  = 500;
+const BACKOFF_MAX  = 15000;
+
+/** §2.4 A 프레임 / §5.3 ack 의 result */
+const RESULT_TEXT = {
+  0: '예약되었습니다',
+  1: '이미 주차된 자리입니다',
+  2: '이미 예약된 자리입니다',
+  3: '잘못된 요청입니다'
+};
+const CANCEL_RESULT_TEXT = {
+  0: '예약이 취소되었습니다',
+  1: '이미 주차된 자리입니다',
+  2: '이미 예약된 자리입니다',
+  3: '잘못된 요청입니다'
+};
+
+/**
+ * 🔴 **차단봉 ack 의 `result`** — 서버 `message` 가 없을 때만 쓰는 **대비 표**다(정본은 서버 문구).
+ * `3` 은 *"장치가 못 한다"* 이고 **재시도가 무의미하다** — `ack_timeout`(*"안 갔다"*, 재시도 의미 있음)과
+ * **다른 칸이다**(socket 명세 §7.3). ⚠ 사용자가 할 일이 다르므로 같은 말로 뭉치면 안 된다.
+ */
+const GATE_RESULT_TEXT = {
+  0: '장치가 명령을 받았습니다',
+  3: '장치가 이 조작을 수행할 수 없습니다 — 다시 눌러도 같습니다'
+};
+
+/** §5.4 테스트 모드 ack 의 result. 4 = 무장하지 않은 채 S/X 가 왔다(§12A.2) */
+const TEST_RESULT_TEXT = {
+  0: '적용되었습니다',
+  1: '이미 주차된 자리입니다',
+  2: '이미 예약된 자리입니다',
+  3: '잘못된 자리 또는 값입니다',
+  4: '테스트 모드가 무장되어 있지 않습니다'
+};
+
+/** §5.3 error code */
+const ERROR_TEXT = {
+  device_offline: '센서가 연결되어 있지 않습니다',
+  ack_timeout:    '장치가 응답하지 않았습니다',
+  bad_request:    '잘못된 요청입니다',
+  rate_limited:   '요청이 너무 잦습니다. 잠시 후 다시 시도하세요',
+
+  /* ── 🔴 모듈 직접 조작의 **전선 전 거절** (SPEC-web-control §5 · socket 정정 2026-08-20)
+     🔑 **이 코드들은 `cmd_result` 가 아니라 `error` 봉투로 온다.** 명령이 **아직 안 나갔다** —
+     장치는 이 일을 모른다. 그래서 문구가 *"요청을 고쳐라"* 여야 하고, **장치를 의심하게 만들면 안 된다.**
+     ⚠ 전선 뒤 거절(`cmd_result.reason`)과 **사람이 할 일이 다르다** — 그쪽은 *"장치·선을 봐라"* 다. */
+  not_declared:   '이 모듈은 조작 가능하도록 선언되어 있지 않습니다 — 명령을 보내지 않았습니다',
+  out_of_range:   '선언된 범위를 벗어난 값입니다 — 명령을 보내지 않았습니다',
+  batch_too_big:  '한 번에 보낼 수 있는 개수를 넘었습니다 — 한 건도 보내지 않았습니다',
+  not_supported:  '이 모듈은 직접 조작 대상이 아닙니다 — 명령을 보내지 않았습니다',
+  module_absent:  '그 장치에 그 이름의 모듈이 없습니다 — 명령을 보내지 않았습니다',
+  node_unregistered: '그 장치가 아직 모듈 목록을 알려 주지 않았습니다 — 명령을 보내지 않았습니다',
+
+  /* ── 하행 슬롯 큐의 거절 둘 (REQ-0155 계약 · 원본 docs/net/DESIGN-server-slot-queue.md §4-B)
+     🔴 **둘 다 사용자 잘못이 아니다.** 코드가 없으면 이 자리에서
+     `'오류가 발생했습니다'` 로 떨어지는데, 그러면 읽는 사람이 자기가 뭘 잘못했거나
+     시스템이 고장 난 것으로 읽고 **다시 누른다** — 우리가 닫으려는 증폭 고리다(§5.14).
+
+     ⚠ `queued` 와 갈라야 한다: `queued` 는 **접수됐다**(기다리면 끝난다),
+     이 둘은 **접수되지 않았다**(기다려도 안 온다). 같은 말로 적으면 사용자가
+     오지 않을 결과를 기다린다. */
+
+  // 시스템 사정이다. 접수 자체가 안 됐으므로 "기다리세요"가 아니라 "다시"가 맞다.
+  queue_full:     '지금 전송 대기가 가득 차 접수하지 못했습니다 — 잠시 뒤 다시 눌러 주세요',
+
+  /* 앞선 요청이 아직 살아 있다. **다시 누르라고 하지 않는다** — 서버가 또 거절할 뿐이다.
+     ⚠ 그 앞선 요청이 내 것인지 남의 것인지 화면은 모른다(서버는 자리 단위로 막는다).
+     그래서 "내 예약이 곧 확정된다"고 말하지 않는다 — 남의 요청이면 거짓말이 된다. */
+  already_pending: '이 자리의 앞선 요청이 아직 처리 중입니다 — 그 결과가 나온 뒤에 다시 시도해 주세요',
+
+  /* 🔴 **`pending` — 같은 뜻의 두 번째 이름이다** (socket 실측 봉투 2026-08-19):
+     `{"type":"error","code":"pending","message":"지금은 조작할 수 없습니다"}`
+     🔑 `already_pending`(예약 계열)과 **같은 상태인데 코드가 다르다.** socket 이 사유 코드가
+     두 이름공간이라고 정정했고(§5.69), **`pending` 은 `actions` 쪽 이름인데 `error` 봉투에도 온다.**
+     ⚠ **표에 없으면 서버 `message`("지금은 조작할 수 없습니다")로 떨어진다** — 틀리진 않지만
+     **"기다려라"인지 "다시 눌러라"인지를 말해 주지 않는다.** 그 차이가 증폭 고리를 만든다(§5.14).
+     ⚠ 통일은 socket 이 다음 개정으로 미뤘다 — **그때까지 두 이름을 다 받는다.** */
+  pending:         '이 자리의 앞선 요청이 아직 처리 중입니다 — 그 결과가 나온 뒤에 다시 시도해 주세요',
+
+  /* 🔴 아래 둘은 **명세에서 온 것이고 내 화면에서 실측하지 못했다**(socket §8 의 err 이름공간).
+     ⚠ 표에 없으면 `'오류가 발생했습니다'` 로 떨어져 **사용자가 자기 잘못으로 읽는다** —
+     `module_absent`·`not_supported` 는 **구성 문제**이고 사용자가 다시 눌러서 될 일이 아니다.
+     🔑 문구를 `actions` 쪽(`REASON_TEXT`)과 **같은 뜻으로** 맞춰 둔다 — 같은 상태를 두 곳이
+     다르게 설명하면 그게 판정자 둘이다. */
+  module_absent:   '이 자리에 필요한 모듈이 없습니다 — 설정을 확인해야 합니다',
+  not_supported:   '이 자리에서는 그 조작을 할 수 없습니다 — 담당 모듈이 없습니다'
+};
+
+/** §2.3 userid ::= 0*8(ALPHA / DIGIT / "_" / "-")
+    명세는 user_id 의 서버측 번역을 규정하지 않는다(§4.1 은 rid 에 대해서만 말한다).
+    전선까지 그대로 흐른다고 보고 전선 문법에 맞춰 좁게 생성한다. */
+const WIRE_USER_RE = /^[A-Za-z0-9_-]{1,8}$/;
+const RID_MAX      = 32;   // §4.1 브라우저 rid 는 최대 32자 불투명 문자열
+
+/* ────────────────────────────────────────────────────────────────
+   1. 명세 예제 (§5.3 / §9.1) — 데모 모드 전용 하드코딩
+   서버가 없을 때 렌더링을 먼저 검증하기 위한 것이고,
+   실제 경로에는 절대 섞이지 않는다.
+   ──────────────────────────────────────────────────────────────── */
+
+/** docs/net/parking-protocol.md §5.3 의 스냅샷 예제 그대로 (v1.2 / 개정 3 형태) */
+const DEMO_SNAPSHOT = {
+  type: 'snapshot',
+  ts: 1755100000000,
+  device: { online: true, device_id: 'P1', uptime: 3600, seq: 1234 },
+  test_mode: { armed: false, override_count: 0 },
+  slots: [
+    { id: 'A1', occupied: 0, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'A2', occupied: 1, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'A3', occupied: 1, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'A4', occupied: 0, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'A5', occupied: 1, reserved: 1, user_id: 'u17', reserved_at: 1755099000000, overridden: 0 },
+    { id: 'B1', occupied: 0, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'B2', occupied: 0, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'B3', occupied: 0, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'B4', occupied: 1, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 },
+    { id: 'B5', occupied: 1, reserved: 0, user_id: null,  reserved_at: null,          overridden: 0 }
+  ]
+};
+
+/** docs/net/parking-protocol.md §9.1 의 data_log.json 형태 (배열, 최신이 0번) */
+const DEMO_FILE_LOG = [
+  {
+    ts: 1755100000000, device_id: 'P1', uptime: 3600, seq: 1234,
+    occupied: '0110100011', reserved: '0000100000',
+    slots: [
+      { id: 'A1', occupied: 0, reserved: 0 }, { id: 'A2', occupied: 1, reserved: 0 },
+      { id: 'A3', occupied: 1, reserved: 0 }, { id: 'A4', occupied: 0, reserved: 0 },
+      { id: 'A5', occupied: 1, reserved: 1 }, { id: 'B1', occupied: 0, reserved: 0 },
+      { id: 'B2', occupied: 0, reserved: 0 }, { id: 'B3', occupied: 0, reserved: 0 },
+      { id: 'B4', occupied: 1, reserved: 0 }, { id: 'B5', occupied: 1, reserved: 0 }
+    ]
+  },
+  { ts: 1755099999000, device_id: 'P1', uptime: 3599, seq: 1233, occupied: '0110100011', reserved: '0000100000', slots: [] }
+];
+
+/**
+ * §9.1 **개정 9** 형태 — `device{online,last_frame_ts}` 가 실린 오프라인 전이 레코드.
+ * REQ-0070 에서 socket-engineer 가 붙인 실제 서버 출력(배열 0번)을 그대로 옮긴 것이다:
+ *
+ *   {"ts":1786730741404, ..., "device":{"online":false,"last_frame_ts":1786730740581},
+ *    "occupied":"0011011101","reserved":"0000000000", ...}
+ *
+ * 위의 DEMO_FILE_LOG 는 `device` 키가 **아예 없는** 옛 형식이다. 둘 다 남겨 둔 이유는
+ * 화면이 교체 전후를 모두 견뎌야 하기 때문이다 — 옛 파일은 '모름', 새 파일은 '끊김 + 경과'.
+ *
+ * ⚠ 함수인 이유: 타임스탬프를 상수로 박으면 화면이 영원히 "N시간 전"을 띄워
+ * 아무것도 증명하지 못한다. 눌린 시각을 기준으로 다시 만들되 **ts 와 last_frame_ts 의
+ * 간격 823ms 는 실제 값 그대로** 유지한다(그 간격만은 시계와 무관한 사실이다).
+ *
+ * occupied 를 0 으로 밀지 않는 것도 실제 서버 동작 그대로다 — online:false 여도
+ * 마지막으로 알던 값이 보존된다(REQ-0070).
+ */
+function makeOfflineFileLog() {
+  const now = Date.now();
+  const occupied = '0011011101';
+  const reserved = '0000000000';
+  return [{
+    ts: now, device_id: 'P1', uptime: 14, seq: 14,
+    device: { online: false, last_frame_ts: now - 823 },
+    occupied: occupied, reserved: reserved,
+    test_mode: { armed: false, override_count: 0 },
+    slots: SLOT_IDS.map(function (id, i) {
+      return { id: id, occupied: Number(occupied[i]), reserved: Number(reserved[i]), overridden: 0 };
+    })
+  }];
+}
+
+/**
+ * §9.1 **개정 4** 형태 — `test_mode.armed = true` 이고 칸 하나가 주입된 파일 레코드.
+ *
+ * 이 고정값이 존재하는 이유(REQ-0122): 화면은 개정 4 이후로도 파일의 `test_mode` 를 버리고
+ * "폴백이면 무조건 모름"으로 처리하고 있었다. 그래서 **폴백으로 넘어간 화면이 주입값을
+ * 실측값처럼 그렸다** — §9.1 이 그 필드를 넣어 막으려던 바로 그 증상이다.
+ *
+ * 이 버튼 하나로 `snapshotFromLog` → `normalizeSnapshot` → 무장 배너 → A3 빗금까지
+ * 한 번에 지난다. 위 `fileFallback()`(test_mode 가 **없는** 옛 형식)과 번갈아 눌러
+ * '무장됨' ↔ '알 수 없음(개정 4 이전 형식)' 이 갈리는지 본다.
+ *
+ * ⚠ 데모 전용이고 서버에 아무것도 보내지 않는다(?demo=1 은 WS 도 폴링도 열지 않는다).
+ */
+function makeArmedFileLog() {
+  const now = Date.now();
+  const occupied = '0010000000';   // A3 만 1 — 아래에서 그 칸을 주입값으로 표시한다
+  const reserved = '0000000000';
+  return [{
+    ts: now, device_id: 'P1', uptime: 120, seq: 120,
+    device: { online: true, last_frame_ts: now - 400 },
+    occupied: occupied, reserved: reserved,
+    test_mode: { armed: true, override_count: 1 },
+    slots: SLOT_IDS.map(function (id, i) {
+      return {
+        id: id, occupied: Number(occupied[i]), reserved: Number(reserved[i]),
+        overridden: id === 'A3' ? 1 : 0
+      };
+    })
+  }];
+}
+
+/* ────────────────────────────────────────────────────────────────
+   2. 사용자 — 인증이 붙을 때 고칠 지점을 한 곳으로 모은다
+   ──────────────────────────────────────────────────────────────── */
+
+const USER_KEY = 'parking.user.v1';
+
+/** localStorage 는 file:// · 시크릿 모드 등에서 던질 수 있다. 전부 감싼다. */
+const safeStore = {
+  get(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } },
+  set(key, value) { try { window.localStorage.setItem(key, value); return true; } catch (e) { return false; } }
+};
+
+function randomToken(len, alphabet) {
+  const chars = alphabet || 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  const buf = new Uint8Array(len);
+  if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+    window.crypto.getRandomValues(buf);
+    for (let i = 0; i < len; i++) out += chars[buf[i] % chars.length];
+  } else {
+    for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+/**
+ * 사용자 정보는 이 객체 하나뿐이다.
+ * 인증 체계가 생기면 여기(그리고 loadUser)만 고치면 되고,
+ * 화면 어디에도 소유 판정이 흩어져 있지 않다 — 판정은 isMine() 한 곳이다.
+ */
+function loadUser() {
+  const raw = safeStore.get(USER_KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.user_id === 'string' && WIRE_USER_RE.test(parsed.user_id)) {
+        return {
+          user_id:      parsed.user_id,
+          display_name: typeof parsed.display_name === 'string' ? parsed.display_name : '이 브라우저',
+          created_at:   typeof parsed.created_at === 'number' ? parsed.created_at : Date.now(),
+          auth:         null   // ← 인증이 붙으면 토큰/역할이 들어올 자리
+        };
+      }
+    } catch (e) { /* 손상된 값이면 새로 만든다 */ }
+  }
+  const fresh = {
+    user_id:      'u' + randomToken(7),   // 'u' + 7자 = 8자 (§2.3 상한)
+    display_name: '이 브라우저',
+    created_at:   Date.now(),
+    auth:         null
+  };
+  safeStore.set(USER_KEY, JSON.stringify(fresh));
+  return fresh;
+}
+
+const user = loadUser();
+
+/* ────────────────────────────────────────────────────────────────
+   3. 애플리케이션 상태
+   ──────────────────────────────────────────────────────────────── */
+
+const state = {
+  /** 정규화된 스냅샷. 서버 데이터는 여기에만 들어가고 절대 변조하지 않는다. */
+  snapshot: null,
+  /* 🔴 모듈 명령의 **마지막 결말**을 `devid|module` 로 보관한다(SPEC-web-control §3.3).
+     ⚠ `cmd_result` 는 **`state` 와 별개 봉투**라 자리 상태에 안 실린다 — 그래서 화면이 따로 들고 있어야
+     사용자가 결과를 볼 수 있다. **`state` 가 다시 와도 지워지지 않는다**(다음 결과가 덮을 때까지). */
+  modCmd: new Map(),
+  /* 보낸 뒤 결말을 기다리는 것. 키는 rid. */
+  modPending: new Map(),
+  /** 낙관적 UI 는 스냅샷을 건드리지 않고 별도 레이어에 쌓는다 → 롤백이 delete 한 줄. */
+  pending: new Map(),            // rid -> { rid, slot, action, status, timer, settleTimer }
+
+  /**
+   * 테스트 모드 요청은 **낙관적 UI 를 쓰지 않는다**(§12A.4).
+   * 여기 담기는 것은 "보냈다"는 사실뿐이고, 무장 여부·주입 여부는 절대 여기서 읽지 않는다.
+   * 예약의 pending 과 성격이 다르다 — 그쪽은 화면을 미리 바꾸지만 이쪽은 안내 문구만 바꾼다.
+   */
+  cmdPending: new Map(),        // rid -> { rid, kind, slot, timer }
+  /** WS 로 마지막에 확인한 무장 상태. 파일 폴백에는 이 정보가 없어(§9.1) 그때 참고값으로만 쓴다. */
+  lastKnownArmed: null,          // true | false | null(한 번도 모름)
+  lastKnownArmedAt: 0,
+  link: 'connecting',            // 'connecting' | 'ws' | 'reconnecting' | 'nows' | 'demo'
+  reconnectAt: 0,
+  attempt: 0,
+  pollFailures: 0,
+  /** 폴백에 대해 마지막으로 알린 상태 종류. 같은 말을 폴링마다 반복하지 않기 위한 것이다. */
+  pollNotice: '',
+  /** 마지막 시뮬 트리거의 결과 — { level:'ok'|'none'|'err', text }. 알림과 별개로 패널에 남긴다. */
+  simOutcome: null,
+
+  /* ── 개정: 봉투 둘 + 판 번호 (socket 명세 §6.8 · REQ-0226) ──────────────────
+     지형(map)과 상태(state)는 **변화율이 달라서** 봉투가 갈렸다 —
+     한 봉투에 담으면 자주 보내면 낭비, 드물게 보내면 낡는다.
+     🔴 그래서 화면은 **지형 사본을 갖는다.** 그 대신 `epoch` 로 **자기 사본이 낡았음을 스스로 안다.**
+     🔑 내 §5.38.3 과 다른 점이 정확히 여기다 — 그때(`9900`)는 **낡은 것을 알 방법이 없었다.**
+        판을 실으면 **사본은 남되 탐지 가능**해진다. 막을 수 없으면 보이게 만든다. */
+  /** 🔴 **서버 인스턴스 id.** `epoch` 단조는 **이 값 안에서만** 성립한다(socket 확정 · `server.cpp:2079`).
+      기동마다 달라지므로 **이 값이 바뀌면 판 비교를 버린다** — 재기동 뒤 판이 1로 되돌아가도
+      옛 프레임으로 오해하지 않는다. ⚠ 이것 없이는 그 재기동이 **화면을 조용히 얼린다.** */
+  srvId: null,
+  /** 🔴 **`map` 보다 먼저 온 `state` 를 여기 보관한다.** 실기에서 접속 순서가
+      `state` → `map` 이었고(2026-08-19 측정), 버리면 **다음 `state` 가 올 때까지 격자가
+      영원히 "상태 미상"** 이다 — 장치가 없으면 서버가 밀 것이 없어 그 다음이 안 온다.
+      🔑 **순서에 의존하지 않게 만드는 쪽이 맞다** — 서버에 "map 을 먼저 보내라"를 요구하면
+      그건 **두 곳에서 지켜야 하는 순서 규칙**이 된다. */
+  heldState: null,
+  map: null,          // { epoch, rows, cols, zones:[…] } — 지형 사본. null = 아직 못 받았다
+  zoneState: null,    // { epoch, ts_ms, zones:[…] }      — 마지막으로 받은 상태
+  /** epoch 불일치를 본 적이 있나. 🔴 그동안은 **옛 사본으로 그리지 않고 "모른다"로 그린다.** */
+  mapStale: false,
+  mapAskedAt: 0,      // get_map 을 마지막으로 보낸 시각 — 무한 재요청 방지
+  /** 옛 판 프레임을 연속으로 무시한 횟수. 🔴 내 최적화가 화면을 얼리지 않게 하는 안전장치다. */
+  olderRun: 0,
+
+  /**
+   * 신선도 배너에 마지막으로 그린 "등급"(REQ-0067). 초 단위 숫자는 여기 들어가지 않는다 —
+   * 이 열쇠가 바뀔 때만 배너 문구를 다시 쓴다. 매초 다시 쓰면 aria-live 가 매초 읽는다.
+   */
+  freshKey: ''
+};
+
+let ridSeq = 0;
+function newRid() {
+  ridSeq += 1;
+  return ('r' + ridSeq + '-' + randomToken(6)).slice(0, RID_MAX);
+}
+
+function pendingForSlot(slot) {
+  for (const p of state.pending.values()) if (p.slot === slot) return p;
+  return null;
+}
+
+/** 소유 판정은 이 함수 하나가 전부다. */
+function isMine(slotUserId) {
+  return typeof slotUserId === 'string' && slotUserId === user.user_id;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   4. 정규화 — WS 경로와 파일 경로가 여기서 하나로 합류한다
+   ──────────────────────────────────────────────────────────────── */
+
+/**
+ * §5.3 모양의 스냅샷을 화면이 쓰는 형태로 정규화한다.
+ * source: 'ws' | 'file' | 'demo'
+ * device.online 은 boolean 또는 null(모름).
+ * ⚠ 개정 9(REQ-0070) 전까지는 "파일 폴백에는 이 정보가 없다"가 맞았지만 지금은 아니다 —
+ *   §9.1 레코드도 device{online,last_frame_ts} 를 싣는다. null 은 **경로**가 아니라
+ *   **그 기록**이 옛 형식이라는 뜻이다(교체 전 서버가 쓴 파일, 또는 WS 스냅샷의 last_frame_ts).
+ */
+function normalizeSnapshot(raw, source) {
+  const bySlot = new Map();
+  const rawSlots = (raw && Array.isArray(raw.slots)) ? raw.slots : [];
+  for (const s of rawSlots) if (s && typeof s.id === 'string') bySlot.set(s.id, s);
+
+  const slots = SLOT_IDS.map(function (id) {
+    const s = bySlot.get(id) || {};
+    return {
+      id: id,
+      occupied: Number(s.occupied) === 1 ? 1 : 0,
+      reserved: Number(s.reserved) === 1 ? 1 : 0,
+      // §5.3 은 키가 항상 있다고 보장하지만 값이 null 일 수 있다.
+      // §9.1(파일)에는 키 자체가 없다 → 둘 다 null 로 수렴시킨다.
+      user_id:     (typeof s.user_id === 'string' && s.user_id.length) ? s.user_id : null,
+      reserved_at: typeof s.reserved_at === 'number' ? s.reserved_at : null,
+      // §5.3 개정 3: 이 칸의 occupied 가 주입된 값인가. 파일 폴백에는 이 키가 없다.
+      overridden:  Number(s.overridden) === 1 ? 1 : 0,
+      known: bySlot.has(id)
+    };
+  });
+
+  const dev = (raw && raw.device) ? raw.device : {};
+
+  /**
+   * §12A.4 — 무장 여부의 **유일한 진실은 여기**다. 그 출처는 아두이노가 매 프레임 보내는
+   * `tmask` 이고, 서버의 기억도 브라우저의 토글 조작도 아니다.
+   * 토글을 눌렀다고 armed 로 치면, 해제 ACK 를 놓쳤을 때 "화면은 해제, 값은 계속 가짜"가 된다.
+   *
+   * 🔴 판정 기준은 **경로(source)가 아니라 `test_mode` 키의 유무**다(REQ-0122).
+   * 예전에는 `source === 'file'` 이면 무조건 null 이었는데, 그건 **개정 4 이전의 사실**이다 —
+   * §9.1 은 2026-08-14(개정 4)부터 파일 레코드에도 `test_mode` 를 싣는다. 서버는 이미 보내고
+   * 있는데 화면이 버리고 있었다. 그래서 §9.1 이 그 필드를 넣으며 막으려던 바로 그 증상
+   * ("폴백 화면이 주입값을 실측값처럼 그린다", §12A.6)이 **폴백 경로에서 그대로 남아 있었다.**
+   * device.online 이 개정 9 에서 똑같이 겪은 일이고, 그때 내린 결론이 여기에도 적용된다:
+   * **모름의 이유는 경로가 아니라 그 기록이 옛 형식이라는 것이다.**
+   *
+   * 키가 없을 때만 경로를 본다. 파일은 옛 형식일 수 있으므로 null(모름)이고,
+   * WS·데모는 서버가 항상 싣는 필드라(§5.3) 종전대로 false 로 둔다 — 여기서 규칙을
+   * 통일하면 WS 의미까지 조용히 바뀐다.
+   */
+  const tm = (raw && typeof raw.test_mode === 'object' && raw.test_mode) ? raw.test_mode : null;
+  const armed = tm
+    /* 키가 있는데 값이 boolean 이 아니면 **모름**이다. `=== true` 로 접으면 깨진 값이
+       조용히 "해제됨"이 되는데, 그건 이 함수가 막으려는 방향의 오답이다 — 무장을 놓치는 쪽. */
+    ? (typeof tm.armed === 'boolean' ? tm.armed : null)
+    : (source === 'file' ? null : false);
+
+  return {
+    source: source,
+    test_mode: {
+      armed: armed,
+      override_count: (armed === true && tm && typeof tm.override_count === 'number')
+        ? tm.override_count
+        : slots.filter(function (s) { return s.overridden === 1; }).length
+    },
+    ts: typeof raw.ts === 'number' ? raw.ts : null,
+    receivedAt: Date.now(),
+    device: {
+      online:    typeof dev.online === 'boolean' ? dev.online : null,
+      device_id: typeof dev.device_id === 'string' ? dev.device_id : null,
+      uptime:    typeof dev.uptime === 'number' ? dev.uptime : null,
+      seq:       typeof dev.seq === 'number' ? dev.seq : null,
+      /* §9.1 개정 9 — 서버가 장치로부터 **마지막 S 프레임을 받은 시각**(ms epoch, 서버 시계).
+         파일을 쓴 시각(`ts`)이 아니다. 0 이면 "장치를 한 번도 못 봤다"는 뜻이므로 나이를 계산하지 않는다.
+         WS 스냅샷(§5.3)에는 이 키가 없다 → null. 옛 형식 파일에도 없다 → null. 둘 다 "모름"이다. */
+      last_frame_ts: (typeof dev.last_frame_ts === 'number' && dev.last_frame_ts > 0) ? dev.last_frame_ts : null,
+      /* 위에서 0 을 null 로 접었는데, **0 과 "키 없음"은 다른 사실**이다(REQ-0070).
+         키가 없으면 "이 경로는 알려 주지 않는다"(모름)이고, 0 이면 "서버가 이 장치를
+         한 번도 못 봤다"는 **적극적인 정보**다 — 서버는 떴는데 아두이노가 한 번도 붙지
+         않았다는 뜻이라 사용자가 할 일이 다르다. 둘을 한 문장으로 합치면 화면이 거짓말을 한다.
+         나이를 못 재는 것은 같으므로 위 필드는 그대로 null 로 두고, 사실만 따로 남긴다. */
+      never_seen: dev.last_frame_ts === 0
+    },
+    slots: slots
+  };
+}
+
+/**
+ * §9.1 data_log.json (JSON 배열, 0번이 최신) → §5.3 스냅샷 모양.
+ * 줄 단위 파싱이 아니다. 유효한 JSON 배열 하나로 읽는다.
+ */
+function snapshotFromLog(logArray) {
+  if (!Array.isArray(logArray) || logArray.length === 0) return null;
+  const latest = logArray[0];
+  if (!latest || typeof latest !== 'object') return null;
+  /* §9.1 개정 9 에서 레코드에 `device` 가 생겼다(REQ-0068/0070).
+     ⚠ **없을 수도 있다** — 개정 전 서버가 쓴 파일, 또는 아직 교체되지 않은 서버.
+     그때는 예전처럼 통째로 null(모름)로 떨어진다. 지어내지 않는다.
+     normalizeSnapshot() 이 형 검사를 하므로 여기서는 그대로 넘기기만 한다. */
+  const d = (latest.device && typeof latest.device === 'object') ? latest.device : {};
+  return {
+    type: 'snapshot',
+    ts: latest.ts,
+    device: {
+      online: d.online,
+      device_id: latest.device_id,
+      uptime: latest.uptime,
+      seq: latest.seq,
+      last_frame_ts: d.last_frame_ts
+    },
+    /* §9.1 개정 4 — 파일 레코드에도 `test_mode` 가 있다(REQ-0122 에서 빠져 있는 것을 확인).
+       ⚠ 여기서 안 옮기면 normalizeSnapshot 을 고쳐도 소용없다 — 그쪽이 보는 것은 이 객체다.
+       옛 형식 파일에는 없으므로 undefined 로 넘어가고, 형 검사는 normalizeSnapshot 이 한다. */
+    test_mode: latest.test_mode,
+    slots: Array.isArray(latest.slots) ? latest.slots : []
+  };
+}
+
+/**
+ * 스냅샷의 내용 지문. **같은 관측을 두 번 센 것인지** 가리는 데만 쓴다.
+ * §9.1 파일에는 user_id 가 없으므로(있는 것은 ts·occupied·reserved 뿐) 그 셋으로 만든다.
+ */
+function snapshotFingerprint(snap) {
+  return String(snap.ts)
+    + '|' + snap.slots.map(function (s) { return s.occupied; }).join('')
+    + '|' + snap.slots.map(function (s) { return s.reserved; }).join('');
+}
+
+/** 두 경로 모두 이 함수 하나만 호출한다. 화면을 바꾸는 입구는 여기뿐이다. */
+function applySnapshot(raw, source) {
+  const snap = normalizeSnapshot(raw, source);
+  const prev = state.snapshot;
+
+  /**
+   * 🔴 신선도의 급소(REQ-0067). `receivedAt` 은 "받은 시각"이 아니라
+   * **"이 값을 처음 확인한 시각"** 이어야 한다.
+   *
+   * 폴백은 3초마다 data_log.json 을 **다시 읽는다**(POLL_MS). 그런데 서버는 상태가 바뀔 때만
+   * 그 파일을 쓴다(§9.4). 그래서 읽을 때마다 시각을 새로 찍으면, **똑같은 바이트를 스무 번 읽고
+   * 스무 번 확인했다고 치는 셈**이 된다 — 나이가 3초를 넘지 못해 신선도 표시가 영원히 안 뜬다.
+   * 파일이 몇 시간 전 것이어도 화면은 방금 확인한 값처럼 보인다. 고치려던 그 거짓말이 그대로 남는다.
+   *
+   * 그래서 파일 경로에서는 **내용이 같으면 이전 시각을 그대로 들고 간다.** 재확인이 아니라 재열람이다.
+   *
+   * WS·데모는 반대로 항상 새로 찍는다. 서버는 스냅샷을 만들 때 device_online() 을 그 자리에서
+   * 계산하므로(server.cpp), 칸이 하나도 안 바뀐 스냅샷이라도 **도착했다는 사실 자체가**
+   * "장치가 3.5초 안에 프레임을 보냈다"는 새 증거다(§3.4).
+   */
+  if (source === 'file' && prev && snapshotFingerprint(prev) === snapshotFingerprint(snap)) {
+    snap.receivedAt = prev.receivedAt;
+  }
+
+  state.snapshot = snap;
+  // 무장 여부를 알 수 있는 경로(WS·데모)에서만 기록해 둔다. 폴백에서는 이 값을
+  // "마지막으로 알던 값"으로만 인용하고, 현재 상태라고 말하지 않는다.
+  if (snap.test_mode.armed !== null) {
+    state.lastKnownArmed = snap.test_mode.armed;
+    state.lastKnownArmedAt = Date.now();
+  }
+  reconcilePending(snap);
+  render();
+}
+
+/** 스냅샷이 이미 요청 결과를 반영했다면 낙관적 표시를 걷는다(ack 유실 대비). */
+function reconcilePending(snap) {
+  const bySlot = new Map(snap.slots.map(function (s) { return [s.id, s]; }));
+  for (const p of Array.from(state.pending.values())) {
+    const s = bySlot.get(p.slot);
+    if (!s) continue;
+    const satisfied = (p.action === 'reserve')
+      ? (s.reserved === 1 && (s.user_id === null || isMine(s.user_id)))
+      : (s.reserved === 0);
+    if (satisfied) clearPending(p.rid);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   5. 화면 — 타일은 한 번만 만들고 이후에는 내용만 갱신한다
+      (재생성하면 포커스가 날아간다)
+   ──────────────────────────────────────────────────────────────── */
+
+const el = {
+  grid:        document.getElementById('grid'),
+  connText:    document.getElementById('conn-text'),
+  connDot:     document.getElementById('conn-dot'),
+  userId:      document.getElementById('user-id'),
+  offline:     document.getElementById('offline-banner'),
+  staleBanner: document.getElementById('stale-banner'),
+  slotsBanner: document.getElementById('slots-banner'),
+  zoneGrid: document.getElementById('zone-grid'),
+  gridHead: document.getElementById('grid-head'),
+  demoBanner:  document.getElementById('demo-banner'),
+  demoTools:   document.getElementById('demo-tools'),
+  devOnline:   document.getElementById('dev-online'),
+  devFrame:    document.getElementById('dev-frame'),
+  devId:       document.getElementById('dev-id'),
+  devUptime:   document.getElementById('dev-uptime'),
+  devSeq:      document.getElementById('dev-seq'),
+  devSource:   document.getElementById('dev-source'),
+  devAge:      document.getElementById('dev-age'),
+  messages:    document.getElementById('messages'),
+  footWs:      document.getElementById('foot-ws'),
+  footBuild:   document.getElementById('foot-build'),
+  dialog:      document.getElementById('confirm-dialog'),
+  dialogTitle: document.getElementById('confirm-title'),
+  dialogBody:  document.getElementById('confirm-body'),
+  simStep:     document.getElementById('sim-step'),
+  simOutcome:  document.getElementById('sim-outcome'),
+  simHint:     document.getElementById('sim-hint'),
+  testBanner:  document.getElementById('test-banner'),
+  testToggle:  document.getElementById('test-toggle'),
+  testState:   document.getElementById('test-state'),
+  testHint:    document.getElementById('test-hint')
+};
+
+const tiles = new Map();   // slotId -> { button, stateText, metaText, flag, inject{set1,set0,clear} }
+
+function buildGrid() {
+  for (const id of SLOT_IDS) {
+    const li = document.createElement('li');
+    li.className = 'slot';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tile';
+    btn.dataset.slot = id;
+
+    const idEl = document.createElement('span');
+    idEl.className = 'tile__id';
+    idEl.textContent = id;
+
+    const stateEl = document.createElement('span');
+    stateEl.className = 'tile__state';
+    stateEl.textContent = '상태 미상';
+
+    const metaEl = document.createElement('span');
+    metaEl.className = 'tile__meta';
+    metaEl.textContent = '연결 대기 중';
+
+    // 주입된 칸임을 그 칸 안에서도 말한다(§12A.6). 빗금과 함께 두 겹으로 표시한다.
+    const flagEl = document.createElement('span');
+    flagEl.className = 'tile__flag';
+    flagEl.textContent = '⚑ 주입값';
+    flagEl.hidden = true;
+
+    // 신선도 표시(REQ-0067) — 칸 안에서도 나이를 말한다. 격자 전체의 탈색만으로는
+    // "얼마나 오래됐나"를 알 수 없고, 그 숫자가 있어야 사용자가 스스로 판단한다.
+    const staleEl = document.createElement('span');
+    staleEl.className = 'tile__stale';
+    staleEl.hidden = true;
+
+    btn.appendChild(idEl);
+    btn.appendChild(stateEl);
+    btn.appendChild(metaEl);
+    btn.appendChild(flagEl);
+    btn.appendChild(staleEl);
+    li.appendChild(btn);
+
+    // 칸별 주입 조작 — 무장 중에만 보인다(CSS: body.is-armed .inject).
+    // 버튼 중첩은 불가하므로 타일 버튼의 형제로 둔다.
+    const inject = document.createElement('div');
+    inject.className = 'inject';
+    inject.setAttribute('role', 'group');
+    inject.setAttribute('aria-label', id + ' 센서값 주입');
+
+    const mk = (label, action, title) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.dataset.slot = id;
+      b.dataset.inject = action;
+      inject.appendChild(b);
+      return b;
+    };
+    // 주입 대상은 occupied 뿐이다(§12A.5). reserved 를 넣는 버튼은 만들지 않는다.
+    const bFree = mk('빈자리', 'set0', id + ' 을 빈자리(occupied=0)로 주입');
+    const bOcc  = mk('주차',   'set1', id + ' 을 주차(occupied=1)로 주입');
+    const bClr  = mk('원래대로', 'clear', id + ' 의 주입을 해제하고 원래 센서값으로');
+
+    li.appendChild(inject);
+    el.grid.appendChild(li);
+
+    tiles.set(id, {
+      button: btn, stateText: stateEl, metaText: metaEl, flag: flagEl, stale: staleEl,
+      inject: { set0: bFree, set1: bOcc, clear: bClr }
+    });
+  }
+}
+
+/**
+ * 예약/취소를 시도할 수 있는 경로인가 — 판단 근거는 **연결 상태(link)** 다.
+ * §5.4 의 reserve/cancel 은 WebSocket 경로에만 있으므로 WS 가 없으면 보낼 곳이 없다.
+ *
+ * 스냅샷의 출처(source)로 판단하면 안 된다: WS 가 다시 붙어도 서버가 다음 스냅샷을
+ * push 할 때까지 source 는 'file' 로 남아 있어(§5.3 은 "변화가 있을 때" push 라고만 한다)
+ * 조용한 주차장에서는 연결된 채로 영원히 예약 불가가 된다.
+ * 격자가 조금 낡은 채로 보내는 것은 §7.2 가 이미 상정한다 — 최종 판정은 ACK 다.
+ */
+/**
+ * 한 번 보내면 이만큼은 다음 하행을 안 보낸다. (사용자 지시 · 2026-08-17)
+ *
+ * 🔴 **값의 근거 — `1000` 이라는 숫자만 남으면 다음 사람이 왜인지 모른다:**
+ * 하행은 **전송 슬롯 주기 1.2초** 안에서 서버 차례에만 나간다
+ * (socket 의 `docs/net/DESIGN-server-slot-queue.md`). **1초 아이들이면 슬롯당 최대 1건**이
+ * 되어 전송 구조와 맞는다. 사람이 그보다 빨리 누를 이유가 없고 **구조가 그보다 빨리 못 받는다.**
+ *
+ * ⚠ **주기(1.2초)보다 짧게 잡은 것은 의도다.** 주기보다 길게 잡으면 멀쩡히 보낼 수 있는
+ * 슬롯을 비우게 된다. 짧게 잡아 큐에 한 칸 차는 편이 낫다 — 큐는 서버가 순서대로 비운다.
+ *
+ * 🔑 **전역이다. 자리별이 아니다.** 사용자가 재현한 모양이 **서로 다른 자리를 연달아 누르는
+ * 것**이었고, 자리별로 걸면 10칸을 돌아가며 눌러 그대로 통과한다. 그리고 막으려는 대상이
+ * 자리가 아니라 **전선 하나**다 — 슬롯 주기는 자리마다 있는 것이 아니라 링크에 하나 있다.
+ * (같은 자리 연타는 서버의 `has_pending_for` 가 이미 막는다. 여기서 막는 것은 그것이 아니다.)
+ *
+ * ⚠ 이것과 `expires_ms` 연동(REQ-0155)은 **서로 다른 것을 막는다**:
+ *   이 아이들 = 사람이 연달아 두들기는 것 / `expires_ms` = 롤백 뒤 재클릭이 쌓이는 것
+ */
+const SEND_COOLDOWN_MS = 1000;
+let lastSentAt = 0;
+let cooldownTimer = 0;
+
+/**
+ * 🔴 **아이들에서 면제되는 상행 프레임** — 즉 **읽기 질의**다.
+ *
+ * 아이들이 막는 것은 *"사람이 하행 명령을 연달아 두들기는 것"* 이다(위 문단). 읽기 질의는
+ * 장치로 내려가지 않고 서버가 자기 사본으로 답하므로 **전선을 물지 않는다.**
+ * `get_map` 을 여기 안 넣었을 때 실제로 난 일: 지도를 한 번 청하면 **그 뒤 1초 동안 예약이
+ * 조용히 거부**됐다(원장 §5.51, 실측 5/5).
+ *
+ * ⚠ **여기에 하행 명령을 넣지 마라.** 넣으면 그 명령만 연타가 그대로 나간다.
+ *    판별자: **장치까지 내려가는가.** 내려가면 하행이고, 서버가 즉답하면 질의다.
+ * 🔑 `get_map` 자체의 과다 요청은 이것과 별개로 `MAP_ASK_MIN_MS` 가 막는다 —
+ *    **막는 주체를 갈라 둔다**(아이들은 사람의 연타, 그쪽은 화면의 자동 재청).
+ */
+const QUERY_TYPES = { get_map: 1 };
+
+/** 남은 아이들 시간(ms). 0 이면 지금 보낼 수 있다. */
+function cooldownLeftMs() {
+  if (!lastSentAt) return 0;
+  const left = SEND_COOLDOWN_MS - (Date.now() - lastSentAt);
+  return left > 0 ? left : 0;
+}
+
+/**
+ * 아이들 동안 화면을 다시 그린다.
+ * ⚠ **조용히 무시하면 안 된다**(사용자 지시): 안 먹혔다고 생각해 **더 세게 누르고**,
+ * 그러면 막으려던 것을 우리가 만든다. 그래서 남은 시간이 **줄어드는 것이 보여야** 한다.
+ * 1초짜리라 기존 1초 티커로는 너무 성기다 — 아이들 동안만 도는 짧은 티커를 따로 쓴다.
+ */
+function startCooldownTicker() {
+  if (cooldownTimer) return;
+  cooldownTimer = window.setInterval(function () {
+    render();
+    if (cooldownLeftMs() === 0) { window.clearInterval(cooldownTimer); cooldownTimer = 0; render(); }
+  }, 150);
+}
+
+function canAct() {
+  if (cooldownLeftMs() > 0) return false;          // 전선이 아직 직전 명령을 물고 있다
+  return state.link === 'ws' || state.link === 'demo';
+}
+
+function actionBlockedReason() {
+  // 아이들을 먼저 본다 — 이 상태는 **곧 풀린다**는 점에서 나머지와 성격이 다르다.
+  // "연결이 없다"로 말하면 고장으로 읽혀서 사용자가 다른 곳을 보게 된다.
+  const left = cooldownLeftMs();
+  if (left > 0) return '방금 보낸 요청이 나가는 중입니다 — ' + (left / 1000).toFixed(1)
+    + '초 뒤에 다시 누를 수 있습니다 (전송 슬롯 주기 1.2초에 맞춘 1초 간격)';
+  if (state.snapshot && state.snapshot.source === 'file') return '파일 폴백 상태입니다. 예약은 서버 연결이 회복된 뒤에 가능합니다';
+  if (state.link === 'nows') return '파일(file://)로 직접 열려 있어 예약할 수 없습니다. 서버(9900)로 접속하세요';
+  if (state.link === 'reconnecting' || state.link === 'connecting') return '서버에 연결되어 있지 않아 예약할 수 없습니다';
+  return '지금은 예약할 수 없습니다';
+}
+
+function blockedMetaText() {
+  const left = cooldownLeftMs();
+  // 누르지 않아도 보이는 자리다. 여기에 남은 시간을 넣어야 "지금은 못 누른다"가 눈에 띈다.
+  if (left > 0) return '잠시 뒤 가능 (' + (left / 1000).toFixed(1) + '초)';
+  return (state.snapshot && state.snapshot.source === 'file') ? '예약 불가 (파일 폴백)' : '예약 불가 (연결 없음)';
+}
+
+/**
+ * 자리 하나의 표시 방식을 정한다.
+ * view: free | reserved | occupied | done | pending | settled | unknown
+ * 4조합은 색·문구·동작이 모두 다르다(색만으로 구분하지 않는다).
+ */
+function tileView(slot) {
+  const p = pendingForSlot(slot.id);
+  if (p) {
+    if (p.status === 'confirmed') {
+      return {
+        view: 'settled', mine: true, disabled: true,
+        state: p.action === 'reserve' ? '예약 확정됨' : '취소 확정됨',
+        meta: '서버 반영 대기 중'
+      };
+    }
+    /* §5.3 확장(REQ-0155) — 서버가 **받았지만 아직 장치로 안 보낸** 상태.
+       이전에는 성공/실패 둘뿐이라 이 구간이 화면에서 침묵이었고, 그 침묵이
+       "안 먹혔나?" → 재클릭 → 큐에 한 건 더 로 이어졌다. 그래서 **말한다.** */
+    if (p.status === 'queued') {
+      const ahead = (typeof p.ahead === 'number') ? p.ahead : null;
+      return {
+        view: 'pending', mine: true, disabled: true,
+        state: p.action === 'reserve' ? '접수됨 · 전송 대기…' : '취소 접수됨 · 전송 대기…',
+        meta: ahead === null ? '서버가 받았습니다 — 전송 차례 대기 중'
+            : ahead === 0 ? '서버가 받았습니다 — 다음 차례입니다'
+                          : '서버가 받았습니다 — 앞에 ' + ahead + '건',
+        /* ⚠ 판단 기준은 `expiresAt`(이탈 예상)이 아니라 **`deadlineAt`(결말 상한)** 이다.
+           이탈 시각만 알고 결말 상한을 모르면 **여전히 "언제까지인지 모른다"** — 그 경우
+           타이머도 안 걸려 있다(REQ-0166). 둘을 헷갈리면 모르는 것을 안다고 말하게 된다. */
+        reason: '서버가 요청을 받았고 아직 장치로 보내지 않았습니다'
+              + (p.deadlineAt ? '' : ' (언제까지인지는 서버가 알려 주지 않았습니다)')
+      };
+    }
+    return {
+      view: 'pending', mine: true, disabled: true,
+      state: p.action === 'reserve' ? '요청됨…' : '취소 요청됨…',
+      meta: '아직 확정이 아닙니다',
+      reason: '요청을 처리하는 중입니다'
+    };
+  }
+
+  if (!state.snapshot || !slot.known) {
+    return { view: 'unknown', mine: false, disabled: true, state: '상태 미상', meta: '데이터 없음', reason: '아직 상태를 받지 못했습니다' };
+  }
+
+  const mine = isMine(slot.user_id);
+  const ownerText = slot.user_id === null ? '소유자 정보 없음' : (mine ? '내 예약' : '예약자 ' + slot.user_id);
+  const deviceDown = state.snapshot.device.online === false;
+
+  // (1,1) 예약한 자리에 입차 — 이 시스템의 정상 완료 상태다. (1,0) 과 뭉개지 않는다.
+  if (slot.occupied === 1 && slot.reserved === 1) {
+    return { view: 'done', mine: mine, disabled: true, state: '사용 중 (입차 완료)', meta: ownerText, reason: '이미 입차한 자리입니다' };
+  }
+  // (1,0) 예약 없이 주차됨
+  if (slot.occupied === 1) {
+    return { view: 'occupied', mine: false, disabled: true, state: '사용 중', meta: '예약 없이 주차됨', reason: '이미 주차된 자리입니다' };
+  }
+  // (0,1) 예약됐고 차는 아직
+  if (slot.reserved === 1) {
+    if (mine && canAct() && !deviceDown) {
+      return { view: 'reserved', mine: true, disabled: false, state: '내 예약', meta: '눌러서 예약 취소', action: 'cancel' };
+    }
+    return {
+      view: 'reserved', mine: mine, disabled: true, state: '예약됨 (입차 전)', meta: ownerText,
+      reason: mine ? actionBlockedReason() : '다른 사용자가 예약한 자리입니다'
+    };
+  }
+  // (0,0) 빈 자리
+  if (deviceDown) {
+    return { view: 'free', mine: false, disabled: true, state: '빈 자리', meta: '센서 끊김 — 예약 불가', reason: ERROR_TEXT.device_offline };
+  }
+  if (!canAct()) {
+    return { view: 'free', mine: false, disabled: true, state: '빈 자리', meta: blockedMetaText(), reason: actionBlockedReason() };
+  }
+  return { view: 'free', mine: false, disabled: false, state: '빈 자리', meta: '눌러서 예약', action: 'reserve' };
+}
+
+/**
+ * 자리 데이터 결손을 **격자 위에서 한 번 더** 말한다.
+ *
+ * 왜 필요한가 (2026-08-16 실측):
+ * 칸마다는 이미 "상태 미상 / 데이터 없음"으로 정확히 갈린다 — `slot.known` 이 그 판단이고
+ * 결손 칸은 빈자리로 그려지지 **않는다**(측정: web/artifacts/probe-slots.json).
+ * 문제는 **그 말이 칸 안에만 있다**는 것이다. 10칸 중 3칸만 미상이면 나머지 7칸이
+ * 정상으로 보이므로 화면 전체는 멀쩡해 보인다. 시연에서 발표자는 그걸 못 알아챈다.
+ *
+ * 그래서 배너는 **집계**만 한다. 칸의 문구를 대신하지 않는다.
+ *
+ * ⚠ 스냅샷이 없을 때는 침묵한다 — 그건 "데이터 결손"이 아니라 "아직 안 왔다"이고,
+ *   연결 상태 줄이 이미 그렇게 말하고 있다. 여기서 또 말하면 첫 화면이 경고로 뒤덮인다.
+ */
+let lastSlotGapText = null;
+function renderSlotGap() {
+  const box = el.slotsBanner;
+  /* 🔴 새 격자가 켜졌으면 **이 배너는 비켜 준다.** 배너는 하나이고, 두 렌더러가 같은 칸에
+     서로 다른 집계를 쓰면 **무엇을 센 수인지 알 수 없게 된다**(루트 지적: 이중 경로가
+     "무엇이 참인가"를 흐린다). 집계는 `renderZoneBanner()` 가 맡는다. */
+  if (mapUsable()) { lastSlotGapText = null; return; }
+  if (!state.snapshot) { box.hidden = true; lastSlotGapText = null; return; }
+
+  const missing = state.snapshot.slots.filter(function (s) { return !s.known; })
+                                      .map(function (s) { return s.id; });
+  if (missing.length === 0) { box.hidden = true; lastSlotGapText = null; return; }
+
+  const text = (missing.length === SLOT_IDS.length)
+    ? '자리 데이터가 없습니다 — 이 기록에 slots 가 없어 ' + SLOT_IDS.length
+      + '칸 전부 상태를 모릅니다. 비어 보이는 것이 아니라 모르는 것입니다.'
+    : missing.length + '칸의 상태를 모릅니다 (' + missing.join(' · ')
+      + '). 이 칸들은 빈자리가 아니라 데이터가 오지 않은 칸입니다.';
+
+  box.hidden = false;
+  /* 같은 문구를 매초 다시 쓰지 마라 — 이 노드는 aria-live 라 스크린리더가 다시 읽는다.
+     stale-banner 가 같은 이유로 임계를 넘나들 때만 문구를 바꾼다(§ 마크업 주석). */
+  if (text !== lastSlotGapText) { box.textContent = text; lastSlotGapText = text; }
+}
+
+function render() {
+  renderConnection();
+  renderDevice();
+  renderSim();
+  renderTestMode();
+  renderSlotGap();
+  /* 개정 격자. 🔴 `map` 이 없거나 낡았으면 스스로 물러나고 옛 격자가 그린다 — 그 판단이
+     `renderZoneGrid()` 안에 있으므로 여기서 조건을 또 쓰지 않는다(조건이 두 곳에 생기면 갈린다). */
+  renderZoneGrid();
+
+  const armed = isArmed();
+  /* 주입 조작을 보낼 곳이 있는가. 무장 표시(§12A.6)와는 **다른 축**이다 —
+     폴백은 "무장인 것은 맞는데 조작은 못 한다"가 정확한 상태다. */
+  const cmdReason = canAct() ? '' : ('주입 명령을 보낼 수 없습니다 — ' + actionBlockedReason());
+  const slots = state.snapshot ? state.snapshot.slots : SLOT_IDS.map(function (id) {
+    return { id: id, occupied: 0, reserved: 0, user_id: null, reserved_at: null, overridden: 0, known: false };
+  });
+
+  for (const slot of slots) {
+    const t = tiles.get(slot.id);
+    if (!t) continue;
+    const v = tileView(slot);
+    t.button.dataset.view = v.view;
+    t.button.dataset.mine = v.mine ? '1' : '0';
+    t.button.dataset.action = v.action || '';
+    t.button.dataset.reason = v.reason || '';
+    t.button.setAttribute('aria-disabled', v.disabled ? 'true' : 'false');
+    t.stateText.textContent = v.state;
+    t.metaText.textContent = v.meta;
+
+    // 주입 표시 — 스냅샷의 칸별 overridden 이 유일한 근거다(§12A.6).
+    const injected = armed && slot.overridden === 1;
+    t.button.dataset.injected = injected ? '1' : '0';
+    t.flag.hidden = !injected;
+
+    // 주입 버튼: 현재 주입값과 일치하는 쪽을 눌린 상태로 보여 준다.
+    const pressed0 = injected && slot.occupied === 0;
+    const pressed1 = injected && slot.occupied === 1;
+    t.inject.set0.setAttribute('aria-pressed', pressed0 ? 'true' : 'false');
+    t.inject.set1.setAttribute('aria-pressed', pressed1 ? 'true' : 'false');
+
+    /* 🔴 폴백에서 무장이 보이게 된 것의 부작용(REQ-0122). `body.is-armed .inject` 가
+       칸마다 조작 버튼 3개를 띄우는데, 예전에는 폴백에서 armed 가 항상 null 이라 이 줄이
+       한 번도 안 돌았다. 이제는 돈다 — 그런데 **폴백에는 보낼 경로가 없다.**
+       누르면 sendCommand() 의 canAct() 가 막아 주므로 트래픽은 안 생기지만,
+       살아 있는 것처럼 보이는 버튼 30개가 시연 중에 뜨는 것 자체가 문제다.
+       무장 표시는 남기고(§12A.6 의 요구) 조작만 죽인다. */
+    t.inject.set0.setAttribute('aria-disabled', cmdReason ? 'true' : 'false');
+    t.inject.set1.setAttribute('aria-disabled', cmdReason ? 'true' : 'false');
+    t.inject.set0.dataset.reason = cmdReason;
+    t.inject.set1.dataset.reason = cmdReason;
+    t.inject.clear.setAttribute('aria-disabled', (cmdReason || !injected) ? 'true' : 'false');
+    t.inject.clear.dataset.reason = cmdReason || '주입된 값이 없어 해제할 것이 없습니다';
+  }
+
+  // 스냅샷이 막 도착했을 때 1초를 기다리지 않고 즉시 신선도 표시를 걷기 위해 여기서도 한 번 민다.
+  renderFreshness();
+}
+
+/**
+ * 시뮬 트리거 패널 (§12B).
+ * **무장 여부를 보지 않는다.** 이 함수 어디에도 isArmed() 가 없어야 한다 —
+ * 무장 경고 없이 데이터를 통제하는 것이 이 버튼의 존재 이유다(§12B.3).
+ */
+function renderSim() {
+  const deviceDown = !!(state.snapshot && state.snapshot.device.online === false);
+  const pending = simPendingCount();
+  let reason = '';
+
+  if (!canAct()) reason = actionBlockedReason();
+  else if (deviceDown) reason = '장치가 연결되어 있지 않습니다 — 시뮬 값은 아두이노가 들고 있으므로 붙어야 진행됩니다';
+
+  el.simStep.setAttribute('aria-disabled', reason ? 'true' : 'false');
+  el.simStep.dataset.reason = reason;
+
+  // 연타는 막지 않는다(§12B.6). 몇 건이 떠 있는지만 보여 준다.
+  el.simHint.textContent = pending > 0
+    ? ('요청 ' + pending + '건 보냄 — 결과는 다음 스냅샷에서 확인합니다')
+    : (reason || '');
+
+  const outcome = state.simOutcome;
+  if (outcome && pending === 0) {
+    el.simOutcome.hidden = false;
+    el.simOutcome.dataset.level = outcome.level;
+    el.simOutcome.textContent = (outcome.level === 'ok' ? '✓ ' : outcome.level === 'none' ? '— ' : '⚠ ') + outcome.text;
+  } else {
+    el.simOutcome.hidden = true;
+    el.simOutcome.textContent = '';
+  }
+}
+
+/** 무장 여부의 유일한 판단 지점. 스냅샷만 본다 — 토글 상태도 ACK 도 보지 않는다(§12A.4). */
+function isArmed() {
+  return !!(state.snapshot && state.snapshot.test_mode.armed === true);
+}
+
+function renderTestMode() {
+  const snap = state.snapshot;
+  const armed = isArmed();
+  const unknown = !!(snap && snap.test_mode.armed === null);
+  const count = snap ? snap.test_mode.override_count : 0;
+  const busy = state.cmdPending.size > 0;
+
+  document.body.classList.toggle('is-armed', armed);
+
+  // 전역 배너 — 무장 중이면 화면 어디를 봐도 걸리게 둔다.
+  if (armed) {
+    el.testBanner.hidden = false;
+    el.testBanner.textContent = '';
+    const strong = document.createElement('strong');
+    strong.textContent = '⚠ 테스트 모드 무장됨 — 지금 보이는 점유 상태는 진짜가 아닐 수 있습니다';
+    const sub = document.createElement('span');
+    sub.className = 'banner__sub';
+    sub.textContent = '주입된 칸 ' + count + '개 · 빗금 친 칸이 주입값입니다. 이 화면의 값을 실측으로 보고하지 마세요.';
+    el.testBanner.appendChild(strong);
+    el.testBanner.appendChild(sub);
+  } else if (unknown && state.lastKnownArmed === true) {
+    /* 여기까지 오는 것은 **개정 4 이전 형식의 기록**뿐이다(REQ-0122). 개정 4 이후 파일에는
+       test_mode 가 실려 있어 위의 armed/해제 가지로 갈린다. 그래도 이 가지를 남겨 두는 이유는
+       옛 서버가 쓴 파일이 남아 있을 수 있고, 그때 마지막으로 알던 값이 "무장"이었다면
+       조용히 넘어가면 안 되기 때문이다. */
+    el.testBanner.hidden = false;
+    el.testBanner.textContent = '';
+    const strong = document.createElement('strong');
+    strong.textContent = '⚠ 테스트 모드가 켜져 있었습니다 — 지금은 확인할 수 없습니다';
+    const sub = document.createElement('span');
+    sub.className = 'banner__sub';
+    sub.textContent = '이 기록에는 무장 여부가 없습니다 (§9.1 개정 4 이전 형식). 값이 주입값일 수 있습니다.';
+    el.testBanner.appendChild(strong);
+    el.testBanner.appendChild(sub);
+  } else {
+    el.testBanner.hidden = true;
+    el.testBanner.textContent = '';
+  }
+
+  // 토글 — aria-pressed 도 스냅샷을 따른다. 누른 사실이 아니라 장치 상태를 표시하는 버튼이다.
+  el.testToggle.setAttribute('aria-pressed', armed ? 'true' : 'false');
+  el.testToggle.textContent = armed ? '테스트 모드 끄기' : '테스트 모드 켜기';
+  const canSend = canAct();
+  el.testToggle.setAttribute('aria-disabled', canSend ? 'false' : 'true');
+
+  if (unknown) {
+    el.testState.dataset.armed = '?';
+    el.testState.textContent = '알 수 없음 (이 기록에 test_mode 가 없습니다 — §9.1 개정 4 이전 형식)';
+  } else if (armed) {
+    el.testState.dataset.armed = '1';
+    el.testState.textContent = '무장됨 · 주입된 칸 ' + count + '개';
+  } else {
+    el.testState.dataset.armed = '0';
+    el.testState.textContent = snap ? '해제됨' : '상태 미상';
+  }
+
+  let hint = '';
+  if (busy) {
+    hint = '요청을 보냈습니다 — 확정은 다음 스냅샷의 test_mode 로 판단합니다.';
+  } else if (!canSend) {
+    hint = actionBlockedReason();
+  } else if (state.snapshot && state.snapshot.device.online === false) {
+    hint = '장치가 연결되어 있지 않아 요청이 거절될 수 있습니다 (센서 끊김은 테스트 모드로 해결되지 않습니다).';
+  }
+  el.testHint.textContent = hint;
+}
+
+function renderConnection() {
+  let text = '연결 준비 중…';
+  let dot = 'dot';
+  const src = state.snapshot ? state.snapshot.source : null;
+
+  if (state.link === 'demo') {
+    text = '데모 모드 (서버 없음)';
+    dot = 'dot dot--demo';
+  } else if (state.link === 'ws') {
+    text = 'WebSocket 연결됨';
+    dot = 'dot dot--live';
+  } else if (src === 'file') {
+    text = '파일 폴백 (data_log.json)';
+    dot = 'dot dot--file';
+  } else if (state.link === 'nows') {
+    text = 'WebSocket 미사용 (file:// 로 열림)';
+    dot = 'dot dot--down';
+  } else if (state.link === 'reconnecting') {
+    const left = Math.max(0, Math.round((state.reconnectAt - Date.now()) / 1000));
+    text = '연결 끊김 — ' + left + '초 후 재연결 시도 (' + state.attempt + '회)';
+    dot = 'dot dot--down';
+  }
+  el.connText.textContent = text;
+  el.connDot.className = dot;
+
+  const down = !!(state.snapshot && state.snapshot.device.online === false);
+  const staleFile = !!(state.snapshot && state.snapshot.source === 'file' && state.snapshot.ts !== null
+                       && (Date.now() - state.snapshot.ts) > STALE_MS);
+  if (down) {
+    // §12A.7 — 이 상태의 원인은 "칸마다 센서가 없다"가 아니라 장치가 서버에 연결되지 않은 것이다.
+    // 테스트 모드로 고쳐지지 않는다는 점을 문구에서 구분한다.
+    el.offline.hidden = false;
+    el.offline.className = 'banner banner--warn';
+    /* ⚠ 여기에 흐르는 숫자를 넣지 마라. 이 배너를 다시 그리는 renderConnection() 은
+       매초 돌지 않는다(state.link === 'reconnecting' 일 때만, boot 타이머 참조).
+       file:// 로 연 폴백에서는 그대로 얼어붙는다. 경과 시간은 매초 도는
+       renderFrameAge() 가 '마지막 프레임' dd 에 적고, 여기서는 그리로 가리키기만 한다. */
+    el.offline.textContent = '⚠ 센서 끊김 (장치 미연결) — 아래 격자는 실시간이 아니라 마지막으로 알던 값입니다. '
+      + '테스트 모드로는 해결되지 않습니다: 아두이노나 net/fake_arduino.py 가 서버에 붙어야 합니다.'
+      + (state.snapshot.device.last_frame_ts !== null
+          ? ' 마지막 프레임을 받은 뒤 흐른 시간은 「장치 상태 · 마지막 프레임」에 있습니다.'
+          : '');
+  } else if (staleFile) {
+    // 파일이 오래됐다는 것만으로 고장이라고 말하면 안 된다 — 서버는 **상태가 바뀔 때만** 쓴다(§9.4).
+    // 조용한 주차장에서는 몇 분 된 기록이 정상이다. 아는 것(기록 시각)만 말하고 진단은 하지 않는다.
+    el.offline.hidden = false;
+    el.offline.className = 'banner banner--note';
+    el.offline.textContent = '이 값은 파일에 기록된 ' + fmtAge(Date.now() - state.snapshot.ts)
+      + ' 전 상태입니다. 서버는 상태가 바뀔 때만 기록하므로(§9.4) 오래된 것 자체가 고장은 아닙니다 — 다만 실시간은 아닙니다.';
+  } else {
+    el.offline.hidden = true;
+    el.offline.textContent = '';
+  }
+}
+
+/** 밀리초를 사람이 읽는 경과시간으로. "22초" / "3분" / "2시간" */
+function fmtAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + '초';
+  if (s < 3600) return Math.round(s / 60) + '분';
+  return Math.round(s / 3600) + '시간';
+}
+
+function fmtUptime(sec) {
+  if (typeof sec !== 'number' || !isFinite(sec)) return '-';
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h + '시간 ' + m + '분 ' + r + '초';
+}
+
+/* ── 신선도 (REQ-0067) ───────────────────────────────────────────
+   화면이 **서버에 묻지 않고 스스로** "이게 지금 값인가"를 판단하는 자리.
+
+   왜 여기서 따로 재는가: 서버가 '센서 끊김'을 알리는 유일한 경로는 push 인데,
+   그 push 를 만드는 판정(§3.4)이 죽으면 아무 말도 오지 않는다. 근거를 서버 메시지에 두면
+   **바로 그 사고 순간에 판단 자체가 멈춘다.** 그래서 유일한 입력은 receivedAt(브라우저 시계)이고,
+   이 함수를 미는 것은 서버 이벤트가 아니라 1초마다 도는 로컬 타이머다.
+
+   docs/dead-detector-pattern.md 4번 — "끝나야만 세는 지표는 끝나지 않는 사고를 영원히 놓친다."
+   그래서 침묵의 길이를 *다음 스냅샷이 도착했을 때* 계산하지 않는다. 매 초 Date.now() 로
+   **진행 중인 침묵**을 잰다. 다음 프레임이 영영 안 와도 이 숫자는 계속 자란다. */
+
+/** 마지막 수신 이후 경과(ms). 한 번도 못 받았으면 null. */
+function silenceMs() {
+  if (!state.snapshot) return null;
+  return Math.max(0, Date.now() - state.snapshot.receivedAt);
+}
+
+/** "지금 값"이라고 말할 수 없는 상태인가. 입력은 로컬 시계 하나뿐이다. */
+function isUnconfirmed() {
+  const ms = silenceMs();
+  return ms !== null && ms > UNCONFIRMED_MS;
+}
+
+function renderFreshness() {
+  const stale = isUnconfirmed();
+  const ms = silenceMs();
+  document.body.classList.toggle('is-stale', stale);
+
+  // 칸마다 나이를 적는다. 격자는 aria-live 가 아니므로 매초 갱신해도 다시 읽히지 않는다.
+  const chip = stale ? ('⏱ ' + fmtAge(ms) + ' 전 값') : '';
+  for (const t of tiles.values()) {
+    t.stale.hidden = !stale;
+    if (stale) t.stale.textContent = chip;
+  }
+
+  /* 배너는 **서버의 주장과 나란히** 둔다.
+     docs/dead-detector-pattern.md 5번 — 단일 지표는 자기 고장을 증언하지 못한다.
+     "센서 연결됨"(서버의 마지막 주장)과 "그 뒤로 아무것도 안 옴"(브라우저 실측)이
+     동시에 보이면, 그 모순 자체가 사용자에게 정보다. 그래서 device.online 을 지우지 않고
+     보조 지표로 함께 적는다 — 다만 신선도 판정에는 쓰지 않는다. */
+  const online = state.snapshot ? state.snapshot.device.online : null;
+  const claim = online === true ? 'online' : (online === false ? 'offline' : 'unknown');
+  const key = stale ? ('stale:' + claim) : '';
+  if (key === state.freshKey) return;      // 등급이 그대로면 문구를 다시 쓰지 않는다
+  state.freshKey = key;
+
+  if (!stale) {
+    el.staleBanner.hidden = true;
+    el.staleBanner.textContent = '';
+    return;
+  }
+
+  el.staleBanner.hidden = false;
+  el.staleBanner.textContent = '';
+  const strong = document.createElement('strong');
+  strong.textContent = '⏱ 지금 값이 아닐 수 있습니다 — 마지막으로 받은 뒤로 확인된 바가 없습니다';
+  const sub = document.createElement('span');
+  sub.className = 'banner__sub';
+  // 진단하지 않는다. 아는 것만 말한다 — 화면은 "조용해서 정상"과 "알림 경로가 죽음"을 구분할 수 없다.
+  sub.textContent = claim === 'online'
+    ? '마지막 소식에서는 센서가 "연결됨"이었습니다. 그 뒤의 침묵이 변화가 없어서인지(정상) 알림이 끊겨서인지 화면은 구분할 수 없어, "확인됨"이라고 말하지 않습니다.'
+    : claim === 'offline'
+      ? '센서 끊김을 알린 뒤로 새 소식이 없습니다. 격자는 마지막으로 알던 값이며 지금 상태가 아닙니다.'
+      // 개정 9(REQ-0070) 이후로 **경로**에는 이 정보가 있다. 없는 것은 이 **기록**이다.
+      // 경로 탓으로 적으면 서버를 교체한 뒤에도 화면이 옛말을 하게 된다.
+      : '이 기록에는 센서 연결 여부가 없습니다 (§9.1 개정 9 이전 형식). 장치 침묵 시간은 옆 "마지막 프레임"에 있습니다.';
+  el.staleBanner.appendChild(strong);
+  el.staleBanner.appendChild(sub);
+}
+
+function renderDevice() {
+  const snap = state.snapshot;
+  if (!snap) {
+    el.devOnline.textContent = '-';
+    el.devFrame.textContent = '-';
+    el.devId.textContent = '-';
+    el.devUptime.textContent = '-';
+    el.devSeq.textContent = '-';
+    el.devSource.textContent = '-';
+    el.devAge.textContent = '-';
+    return;
+  }
+  const online = snap.device.online;
+  // 모름의 이유도 개정 9 이후로 갈렸다 — 파일이라서가 아니라 **이 기록이 옛 형식이라서** 없다.
+  el.devOnline.textContent = online === true ? '연결됨'
+    : online === false ? '끊김'
+    : (snap.source === 'file' ? '알 수 없음 (이 기록에 device 가 없음 — 개정 9 이전 형식)'
+                              : '알 수 없음 (이 경로에는 이 정보가 없음)');
+  el.devId.textContent     = snap.device.device_id === null ? '-' : snap.device.device_id;
+  el.devUptime.textContent = fmtUptime(snap.device.uptime);
+  el.devSeq.textContent    = snap.device.seq === null ? '-' : String(snap.device.seq);
+  el.devSource.textContent = snap.source === 'ws' ? 'WebSocket push'
+                           : snap.source === 'file' ? 'data_log.json 폴링 (폴백)'
+                           : '데모 (하드코딩 예제)';
+  renderAge();
+  renderFrameAge();
+}
+
+/**
+ * §9.1 개정 9 (REQ-0070) — `device.last_frame_ts` = 서버가 장치로부터 **마지막 S 프레임을
+ * 받은 시각**(ms epoch, 서버 시계). 파일을 쓴 시각(`ts`)이 아니다.
+ *
+ * 왜 따로 적는가: 폴백 화면은 "센서 끊김"이라고 말할 수는 있어도 **언제부터인지**를 말할 수
+ * 없었다. 끊긴 지 2초인지 두 시간인지에 따라 사용자가 할 일이 다르다 — 전자는 기다리면 되고
+ * 후자는 장치를 보러 가야 한다. 이 줄이 그 차이를 만든다.
+ *
+ * ⚠ 없을 수 있는 값이다. WS 스냅샷(§5.3)에는 이 키가 없고, 개정 전 서버가 쓴 파일에도 없고,
+ * 장치를 한 번도 못 봤으면 0 이다. 셋 다 normalizeSnapshot() 에서 null 로 수렴한다.
+ * **null 을 숫자로 취급하면 "0초 전 수신"이라는 자신만만한 거짓말이 된다** — fmtAge 가 음수를
+ * 0 으로 깎기 때문이다. 그래서 여기서 먼저 갈라 모름은 모름이라고 적는다.
+ */
+function renderFrameAge() {
+  const snap = state.snapshot;
+  if (!snap) { el.devFrame.textContent = '-'; return; }
+
+  const lf = snap.device.last_frame_ts;
+  if (lf === null) {
+    // 셋 다 "나이를 못 잰다"로 끝나지만 원인이 다르므로 문구를 가른다.
+    el.devFrame.textContent = snap.device.never_seen
+      ? '한 번도 받지 못했습니다 (last_frame_ts = 0 · 장치가 서버에 붙은 적이 없습니다)'
+      : snap.source === 'file'
+        ? '알 수 없음 (이 기록에 last_frame_ts 가 없습니다 — 개정 9 이전 형식)'
+        : '알 수 없음 (이 경로에는 이 정보가 없습니다)';
+    return;
+  }
+
+  /* 두 시각의 성격이 다르다.
+     · ts - last_frame_ts : **둘 다 서버 시계**라 시계 어긋남과 무관한 정확한 값이다.
+       (REQ-0070 샘플: 741404 - 740581 = 823ms)
+     · now - last_frame_ts: 브라우저 시계로 재므로 서버와 어긋난 만큼 틀린다. 대신 **지금도 자란다** —
+       다음 파일이 영영 안 와도 이 숫자는 계속 커진다(docs/dead-detector-pattern.md 4번).
+     요청(REQ-0070)이 지시한 기준은 now - last_frame_ts 이므로 그것을 앞에 놓고,
+     시계와 무관한 값은 뒤에 참고로 붙인다. */
+  /* 정상 기록이라면 last_frame_ts <= ts 다(먼저 받고 나중에 쓴다). 뒤집혀 있으면 기록이
+     이상한 것이므로 침묵 길이를 지어내지 않는다 — fmtAge 는 음수를 0 으로 깎기 때문에
+     그대로 두면 "0초 침묵"이라는 없는 사실이 화면에 뜬다. */
+  const settled = (snap.ts !== null && snap.ts >= lf)
+    ? (' · 기록 시점에 이미 ' + fmtAge(snap.ts - lf) + ' 침묵')
+    : '';
+  const ageMs = Date.now() - lf;
+
+  // 브라우저 시계가 서버보다 뒤서면 음수가 나온다. 0 으로 깎아 "방금"이라고 말하지 않는다.
+  if (ageMs < -2000) {
+    el.devFrame.textContent = '계산 불가 (브라우저 시계가 서버 시계보다 뒤섭니다)' + settled;
+    return;
+  }
+
+  /* 🔴 **파일 폴백에서 이 값은 "장치의 침묵"이 아니다 — 상한이다.** (원장 §5.7 · 2026-08-17 실측)
+   *
+   * `data_log.json` 은 **상태가 바뀔 때만** 써지고 `last_frame_ts` 는 그 판정 키에 **일부러 빠져
+   * 있다**(`server.cpp:1340` — 넣으면 매 프레임이 변화가 되어 초당 한 번 디스크에 쓴다).
+   * 그래서 **장치가 1Hz 로 멀쩡히 보내는 동안에도 파일의 이 값은 얼어 있다.**
+   *
+   * 실측: 40초 넘게 한 값 그대로였고(5초 간격 8표본) 같은 시각 WS 와 **96,558ms** 벌어져 있었다.
+   * 그 상태에서 `"80초 전 수신"` 이라고 적으면 **멀쩡한 장치를 죽은 것처럼 말하는 거짓 경보**다 —
+   * REQ-0067 이 막으려던 것("죽은 데이터를 살아있는 것처럼 보이지 않기")의 **정확한 반대 방향**이다.
+   *
+   * 🔑 이 경로에서 화면이 아는 것은 **`침묵 ≤ now − last_frame_ts`** 까지다. 아래 경계는 0 이다
+   * (장치가 방금 보냈어도 상태가 안 바뀌면 파일은 그대로다). **그래서 상한이라고 적는다.**
+   * ⚠ `⚠` 대신 `⏱` 를 쓴다 — 이 상태는 고장이 아니라 **모르는 것**이고, 경보 기호를 붙이면
+   *    멀쩡한 장치에 경보가 뜬다. 그게 지금 고치는 결함이다.
+   *
+   * **WS 주 경로는 이 문제가 없다** — 스냅샷이 프레임마다 새로 만들어져 값이 실시간이다.
+   * 즉 **정확한 경로가 죽었을 때만 부정확한 경로가 뜨는데, 하필 그때 거짓 경보를 냈다.**
+   */
+  if (snap.source === 'file') {
+    let t = '⏱ 침묵 최대 ' + fmtAge(ageMs) + ' (상한 — 지금 보내고 있는지는 이 경로로 모릅니다)';
+    if (snap.ts !== null) t += ' · 기록은 ' + fmtAge(Date.now() - snap.ts) + ' 전';
+    // 이 `online` 도 같은 기록에서 온 얼어 있는 값이다. 지금 사실로 말하지 않는다.
+    if (snap.device.online === false) t += ' · 기록 시점엔 오프라인';
+    el.devFrame.textContent = t + settled;
+    return;
+  }
+
+  let text = fmtAge(ageMs) + ' 전 수신';
+  if (snap.device.online === false) text = '⚠ ' + text + ' — 그 뒤로 장치 프레임 없음';
+  el.devFrame.textContent = text + settled;
+}
+
+function renderAge() {
+  const snap = state.snapshot;
+  if (!snap) { el.devAge.textContent = '-'; return; }
+  // 흐르는 숫자는 여기에만 둔다 — 이 dd 는 aria-live 가 아니다(배너는 live 라 매초 못 바꾼다).
+  let text = fmtAge(silenceMs()) + ' 전 수신';
+  if (isUnconfirmed()) text = '⏱ ' + text + ' · 그 뒤로 확인된 바 없음';
+  if (snap.ts !== null) {
+    // ts 는 서버 시계다. 브라우저 시계와 어긋날 수 있으므로 참고값으로만 표시한다.
+    const secStamp = Math.round((Date.now() - snap.ts) / 1000);
+    text += ' · 기록 시각 기준 ' + secStamp + '초 전';
+  }
+  el.devAge.textContent = text;
+}
+
+let msgCount = 0;
+function showMessage(text, kind) {
+  const box = document.createElement('div');
+  box.className = 'msg msg--' + (kind || 'info');
+  const line = document.createElement('span');
+  line.textContent = text;                     // 서버·사용자 문자열은 항상 textContent
+  const stamp = document.createElement('time');
+  const now = new Date();
+  stamp.textContent = now.toLocaleTimeString('ko-KR');
+  box.appendChild(line);
+  box.appendChild(stamp);
+  el.messages.insertBefore(box, el.messages.firstChild);
+  msgCount += 1;
+  while (el.messages.children.length > 5) el.messages.removeChild(el.messages.lastChild);
+  window.setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 12000);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   6. 예약 / 취소 — 낙관적 UI 와 롤백 (§8)
+   ──────────────────────────────────────────────────────────────── */
+
+function markPending(rid, slot, action) {
+  const entry = {
+    rid: rid, slot: slot, action: action, status: 'requested',
+    ahead: null,          // queued 로 갱신된다(REQ-0155). 모르면 null 이고 화면도 그렇게 말한다
+    expiresAt: null,      // **큐 이탈** 예상 시각(expires_ms 기준). null = 서버가 안 줬다
+    /* 결말까지의 절대 마감(expires_ms + ack_budget_ms). null = 전체 상한을 모른다 = 타이머를 안 건다.
+       ⚠ expiresAt 과 다른 값이다 — 하나는 "큐에서 나갈 때까지", 하나는 "결말까지"다(REQ-0166). */
+    deadlineAt: null,
+    timer: window.setTimeout(function () { onSelfTimeout(rid); }, ACK_TIMEOUT),
+    settleTimer: 0
+  };
+  state.pending.set(rid, entry);
+  render();
+}
+
+function clearPending(rid) {
+  const p = state.pending.get(rid);
+  if (!p) return;
+  if (p.timer) window.clearTimeout(p.timer);
+  if (p.settleTimer) window.clearTimeout(p.settleTimer);
+  state.pending.delete(rid);
+}
+
+function rollback(rid, message) {
+  const p = state.pending.get(rid);
+  clearPending(rid);
+  if (message) showMessage((p ? p.slot + ' · ' : '') + message, 'err');
+  render();
+}
+
+/**
+ * **서버가 준 전체 상한**(`expires_ms + ack_budget_ms`)을 넘겼을 때 (REQ-0155 · REQ-0166).
+ * 문구를 자체 타임아웃과 가른다 — 원인이 다르다. 자체 타임아웃은 "서버가 아무 말도 안 했다"이고
+ * 이쪽은 "서버가 접수는 했는데 자기가 준 상한 안에 결말을 못 냈다"이다.
+ *
+ * ⚠ **문구를 고쳤다(REQ-0166).** 예전에는 `"상한 시간 안에 장치로 보내지 못해"` 였는데
+ * **그 말이 거짓일 수 있다** — 이 타이머는 이제 **큐 이탈 후 결말까지**를 덮으므로,
+ * 터지는 경우의 상당수가 *"보냈고 장치가 ack 를 안 준 것"* 이다. 어느 쪽인지 화면은 모른다.
+ * → **모르는 것을 단정하지 않는다.** "결과가 오지 않았다"까지만 말한다(§5.10 과 같은 계열).
+ */
+function onQueueExpired(rid) {
+  const p = state.pending.get(rid);
+  if (!p) return;
+  rollback(rid, '서버가 접수했지만 알려 준 상한 시간 안에 결과가 오지 않아 요청을 되돌렸습니다');
+}
+
+/** ACK 가 영원히 안 와도 "요청됨"으로 남지 않게 하는 자체 타임아웃 */
+function onSelfTimeout(rid) {
+  const p = state.pending.get(rid);
+  if (!p) return;
+  rollback(rid, '응답이 없어 요청을 되돌렸습니다 (자체 타임아웃 ' + (ACK_TIMEOUT / 1000) + '초)');
+}
+
+function confirmDialog(title, body) {
+  return new Promise(function (resolve) {
+    const dlg = el.dialog;
+    if (!dlg || typeof dlg.showModal !== 'function') {
+      resolve(window.confirm(title + '\n' + body));
+      return;
+    }
+    el.dialogTitle.textContent = title;
+    el.dialogBody.textContent = body;
+    dlg.returnValue = '';
+    function onClose() {
+      dlg.removeEventListener('close', onClose);
+      resolve(dlg.returnValue === 'ok');
+    }
+    dlg.addEventListener('close', onClose);
+    dlg.showModal();
+  });
+}
+
+/**
+ * 확인 대화상자에 덧붙이는 신선도 한 줄(REQ-0067).
+ * 격자를 흐리게 하는 것만으로는 부족하다 — 누르기 직전이 그 사실이 가장 필요한 순간이다.
+ * 막지는 않는다: 최종 판정은 ACK 이고(§7.2), 조용한 주차장에서 예약을 막으면 그게 더 큰 고장이다.
+ */
+function staleNote() {
+  if (!isUnconfirmed()) return '';
+  return ' ⏱ 다만 이 자리의 상태는 ' + fmtAge(silenceMs())
+       + ' 전에 받은 값이고 그 뒤로 확인되지 않았습니다 — 지금은 다를 수 있습니다.';
+}
+
+/**
+ * 확인을 누른 **뒤** 재검사에서 걸렀을 때, **왜 걸렀는지**를 말한다.
+ *
+ * 🔴 2026-08-17 (docs/web/FINDING-link-blink-2026-08-17.md §3.3 · 실측 3/3)
+ * 전에는 이유가 무엇이든 한 문장이었다 — "그 사이 자리 상태가 바뀌어".
+ * 그런데 **장치 링크가 3.5초 이상 끊기면**(`OFFLINE_MS`) 빈 자리도 `action` 이 없어져
+ * 여기로 떨어진다. 그때 저 문장은 **거짓**이다. 자리 상태는 그대로이고 링크가 끊긴 것이다.
+ *
+ * 왜 문구가 중요한가: 실제 피해는 예약이 안 된 것이 아니라(다시 누르면 된다)
+ * **읽는 사람이 엉뚱한 곳을 본다**는 것이다. "누가 먼저 채갔나"로 읽으면 자리 목록을 뒤지고,
+ * 진짜 원인인 장치 링크는 아무도 안 본다. 링크는 **스스로 복구되므로**(실측 3/3)
+ * "잠시 뒤 다시" 가 사실이기도 하다.
+ *
+ * ⚠ 동작은 안 바꾼다. 장치가 끊긴 동안 명령을 안 보내는 것은 옳다 — 보내도 못 간다.
+ */
+function afterConfirmBlockedText(slotId, verb) {
+  const deviceDown = !!(state.snapshot && state.snapshot.device.online === false);
+  // 받침이 있으면 '을', 없으면 '를'. ('예약을' / '취소를' — 안 가르면 "취소을"이 뜬다)
+  const last = verb.charCodeAt(verb.length - 1) - 0xAC00;
+  const eul = (last >= 0 && last < 11172 && last % 28 !== 0) ? '을' : '를';
+  return slotId + ' · ' + (deviceDown
+    ? '장치 연결이 끊겨 ' + verb + eul + ' 보내지 않았습니다 — 자리 상태는 그대로입니다. '
+      + '연결은 대개 몇 초 안에 스스로 복구되니 잠시 뒤 다시 눌러 주세요'
+    : '그 사이 자리 상태가 바뀌어 ' + verb + '하지 않았습니다');
+}
+
+async function requestReserve(slotId) {
+  const ok = await confirmDialog('예약하시겠습니까?',
+    slotId + ' 자리를 예약합니다. 확인을 누르면 서버로 예약 요청을 보냅니다.' + staleNote());
+  if (!ok) return;
+
+  // 대화상자를 여는 동안 상태가 바뀌었을 수 있다.
+  const slot = currentSlot(slotId);
+  if (!slot || tileView(slot).action !== 'reserve') {
+    showMessage(afterConfirmBlockedText(slotId, '예약'), 'err');
+    return;
+  }
+  const rid = newRid();
+  markPending(rid, slotId, 'reserve');
+  transport.send({ type: 'reserve', slot: slotId, user_id: user.user_id, rid: rid });
+}
+
+async function requestCancel(slotId) {
+  const ok = await confirmDialog('예약을 취소하시겠습니까?',
+    slotId + ' 자리의 내 예약을 취소합니다.' + staleNote());
+  if (!ok) return;
+
+  const slot = currentSlot(slotId);
+  if (!slot || tileView(slot).action !== 'cancel') {
+    // 예약과 같은 이유로 여기도 갈린다 — 내 예약의 취소도 deviceDown 이면 action 이 없어진다
+    // (tileView 의 `mine && canAct() && !deviceDown`). 문구가 하나면 여기서도 거짓말을 한다.
+    showMessage(afterConfirmBlockedText(slotId, '취소'), 'err');
+    return;
+  }
+  const rid = newRid();
+  markPending(rid, slotId, 'cancel');
+  transport.send({ type: 'cancel', slot: slotId, rid: rid });
+}
+
+/* ── 장치 명령 전송 — 테스트 모드(§12A) 와 시뮬 트리거(§12B) ──────────
+   공통점: 화면 상태를 **절대** 미리 바꾸지 않는다. 요청은 요청일 뿐이고
+   결과의 진실은 다음 스냅샷이다. 예약의 낙관적 UI 와 다른 점이 이것이다.
+
+   ⚠ 두 명령은 성격이 전혀 다르다(§12B.3). 여기서 같은 큐를 쓰는 것은
+   재전송·타임아웃 기계장치가 같기 때문일 뿐이고, **화면에서는 섞이면 안 된다** —
+   무장 여부와 무관하게 도는 것이 시뮬 트리거이고, 시뮬 결과에는 주입 표시가 붙지 않는다. */
+
+const CMD_LABEL = {
+  test_arm:     '테스트 모드 켜기',
+  test_disarm:  '테스트 모드 끄기',
+  test_set:     '센서값 주입',
+  test_clear:   '주입 해제',
+  sim_step:     '시뮬레이션 한 걸음',
+  /* 개정 조작(socket 명세 §6.8). 요청 `type` 이 `actions` 키와 **같은 이름**이라
+     이 표에 이름을 더하는 것만으로 문구가 붙는다 — 조작이 늘어도 분기가 안 는다. */
+  /* 🔴 ~~`open_gate` · `close_gate`~~ **제거했다**(2026-08-20). 화면이 그 명령을 안 보내므로
+     `cmdPending` 에 그 `kind` 가 들어올 일이 없다. 근거는 `ACTION_LABEL` 주석에 있다. */
+};
+
+/** §12B.4 — M 프레임의 result. 5 는 실패가 아니라 "바꿀 대상이 없다"이다. */
+const SIM_RESULT_TEXT = {
+  0: '한 걸음 진행했습니다',
+  5: '바꿀 시뮬 자리가 없습니다 — 아무것도 바뀌지 않았습니다'
+};
+
+function sendCommand(kind, slot, occupied) {
+  if (!canAct()) { showMessage(actionBlockedReason(), 'err'); return; }
+
+  const rid = newRid();
+  const payload = { type: kind, rid: rid };
+  if (slot) payload.slot = slot;
+  if (kind === 'test_set') payload.occupied = occupied;
+
+  state.cmdPending.set(rid, {
+    rid: rid, kind: kind, slot: slot || null,
+    // ACK 가 안 와도 안내 문구가 영원히 남지 않게 한다. 화면 상태는 어차피 안 바꿨으므로
+    // 되돌릴 것이 없다 — 지우는 것은 "보내는 중" 표시뿐이다.
+    /* 🔴 이 상수는 **"서버가 아무 말도 안 할 때"의 그물**이고 큐 대기를 재는 값이 아니다(REQ-0202).
+       서버는 큐에 담는 즉시 `queued` 를 보내고(`server.cpp` 의 `send_queued` 는 명령 종류와
+       무관하다), **그 프레임이 오면 위 핸들러가 `expires_ms + ack_budget_ms` 로 다시 건다.**
+       → 그러므로 이 6초가 덮는 것은 **서버-로컬 왕복(ms 단위)** 뿐이다.
+       ⚠ 여기에 큐 예산을 박으면 **화면이 서버 값을 짐작하는 것**이 된다(§5.14). 안 박는다. */
+    timer: window.setTimeout(function () { clearCmdPending(rid, true); }, ACK_TIMEOUT)
+  });
+  transport.send(payload);
+  render();
+}
+
+function clearCmdPending(rid, timedOut) {
+  const p = state.cmdPending.get(rid);
+  if (!p) return;
+  if (p.timer) window.clearTimeout(p.timer);
+  state.cmdPending.delete(rid);
+  if (timedOut) {
+    const label = CMD_LABEL[p.kind] || '요청';
+    if (p.kind === 'sim_step') state.simOutcome = { level: 'err', text: '응답이 없습니다 (자체 타임아웃)' };
+    showMessage(label + ' — 응답이 없습니다 (자체 타임아웃 '
+      + (ACK_TIMEOUT / 1000) + '초). 화면 상태는 바꾸지 않았습니다.', 'err');
+  }
+  render();
+}
+
+/** 시뮬 요청이 몇 건 떠 있는가 — 연타는 막지 않는다(§12B.6). 각 누름이 독립 요청이다. */
+function simPendingCount() {
+  let n = 0;
+  for (const p of state.cmdPending.values()) if (p.kind === 'sim_step') n += 1;
+  return n;
+}
+
+el.simStep.addEventListener('click', function () {
+  if (el.simStep.getAttribute('aria-disabled') === 'true') {
+    showMessage(el.simStep.dataset.reason || '지금은 시뮬레이션을 진행할 수 없습니다', 'info');
+    return;
+  }
+  // §12B.3 — 무장 여부를 보지 않는다. 이 줄에 isArmed() 가 끼어들면 요구가 무너진다.
+  state.simOutcome = null;
+  sendCommand('sim_step', null, null);
+});
+
+el.testToggle.addEventListener('click', function () {
+  if (el.testToggle.getAttribute('aria-disabled') === 'true') {
+    showMessage(actionBlockedReason(), 'info');
+    return;
+  }
+  // 현재 무장 여부는 스냅샷에서 읽는다. 토글이 자기 상태를 들고 있지 않다.
+  sendCommand(isArmed() ? 'test_disarm' : 'test_arm', null, null);
+});
+
+el.grid.addEventListener('click', function (event) {
+  const btn = event.target.closest('.inject button');
+  if (!btn) return;
+  const slot = btn.dataset.slot;
+  const action = btn.dataset.inject;
+  if (btn.getAttribute('aria-disabled') === 'true') {
+    /* 타일 핸들러는 closest('.tile') 로 걸러지므로 여기서 막을 필요가 없다.
+       이유는 버튼이 들고 있다 — "해제할 것이 없다"와 "보낼 경로가 없다"는 다른 사정이고,
+       폴백에서 후자를 전자로 말하면 사용자가 엉뚱한 것을 고치러 간다. */
+    showMessage(slot + ' · ' + (btn.dataset.reason || '주입된 값이 없어 해제할 것이 없습니다'), 'info');
+    return;
+  }
+  if (action === 'clear') sendCommand('test_clear', slot, null);
+  else sendCommand('test_set', slot, action === 'set1' ? 1 : 0);
+});
+
+/* ────────────────────────────────────────────────────────────────
+   모듈 직접 조작 — 정본은 `docs/net/SPEC-web-control.md` (socket · 1단계)
+   🔴 **필드 이름을 하나도 지어내지 않았다.** 명세에 없는 것은 안 만든다.
+   ──────────────────────────────────────────────────────────────── */
+
+/** `devid|module` — 모듈 하나를 가리키는 키. 🔑 **복합 키다**(§5.42: 이름만으로는 고유하지 않다). */
+function modKey(devid, name) { return String(devid) + '|' + String(name); }
+
+/**
+ * 🔴 모듈에 값을 보낸다 (§2.1 `send_cmd`).
+ *
+ * ⚠ **성공을 여기서 선언하지 않는다.** 보낸 것은 "보냈다"까지이고 결말은 `cmd_result` 가 가져온다.
+ * 우리는 이 함정을 이미 밟았다 — 옛 화면이 `ack` 만 보고 *"예약되었습니다"* 를 띄워
+ * **전선에 나가지도 않은 요청을 성공으로 선언**했다(seam.h §4-B · 명세 §3.3 이 그것을 인용한다).
+ */
+function sendModuleCmd(devid, name, value) {
+  if (!canAct()) { showMessage(actionBlockedReason(), 'err'); return; }
+  const rid = newRid();
+  const key = modKey(devid, name);
+  state.modPending.set(rid, { devid: devid, module: name, value: value, at: Date.now() });
+  /* 보내는 즉시 "보내는 중"으로 바꾼다 — 사용자가 눌린 것을 알아야 한다.
+     🔴 다만 이것은 **화면의 낙관 표시가 아니라 "요청 접수"** 다. 값은 안 바꾼다. */
+  state.modCmd.set(key, { phase: 'sending', rid: rid, value: value });
+  transport.send({ type: 'send_cmd', rid: rid, devid: devid, module: name, value: value });
+  render();
+}
+
+/**
+ * 🔴 `cmd_result` — **새 타입이다**(§3.3). `ack` 에 얹혀 오지 않는다.
+ * `outcome` 셋을 **갈라서** 보관한다 — 고치는 곳이 다르기 때문이다:
+ *   ok(없음) · rejected(값·등록을 고쳐라 · 재시도 무의미) · no_answer(장치·링크)
+ */
+function applyCmdResult(msg) {
+  if (!msg || typeof msg !== 'object') return;
+  const key = modKey(msg.devid, msg.module);
+  const p = state.modPending.get(msg.rid);
+  if (p) state.modPending.delete(msg.rid);
+  state.modCmd.set(key, {
+    phase: 'done',
+    rid: msg.rid,
+    outcome: msg.outcome,          /* "ok" | "rejected" | "no_answer" */
+    /* 🔴 `reason` — socket 이 2026-08-20 에 추가했다(§3.3).
+       `rejected` → `device_refused` · `no_answer` → `ack_timeout` **둘뿐**이다.
+       ⚠ **`ok` 면 키가 없다**(존재/부재 규칙) — `reason:null` 을 안 싣는 것이 계약이다.
+       🔑 이 줄이 없어서 사유 코드가 통째로 버려지고 있었다. **검사가 잡았다.** */
+    reason: msg.reason,
+    result: msg.result,            /* no_answer 면 -1 */
+    value: msg.value,
+    message: msg.message,
+    at: Date.now()
+  });
+  render();
+}
+
+/** `batch_result` (§3.4) — **접수** 결과이지 결말이 아니다. 건별 결말은 `cmd_result` 로 따로 온다. */
+function applyBatchResult(msg) {
+  if (!msg) return;
+  showMessage('묶음 접수: 대기 ' + msg.queued + '건 · 거절 ' + msg.rejected + '건 (상한 ' + msg.max + ')'
+    + ' — 각 건의 결과는 따로 옵니다', msg.rejected > 0 ? 'err' : 'info');
+}
+
+function currentSlot(slotId) {
+  if (!state.snapshot) return null;
+  return state.snapshot.slots.find(function (s) { return s.id === slotId; }) || null;
+}
+
+el.grid.addEventListener('click', function (event) {
+  const btn = event.target.closest('.tile');
+  if (!btn) return;
+  const slotId = btn.dataset.slot;
+
+  // aria-disabled 는 클릭을 막지 않는다(막으면 키보드/스크린리더 사용자가
+  // 4조합 중 3개에 아예 도달하지 못한다). 대신 이유를 알려 준다.
+  if (btn.getAttribute('aria-disabled') === 'true') {
+    showMessage(slotId + ' · ' + (btn.dataset.reason || '지금은 선택할 수 없습니다'), 'info');
+    return;
+  }
+  if (btn.dataset.action === 'reserve') requestReserve(slotId);
+  else if (btn.dataset.action === 'cancel') requestCancel(slotId);
+});
+
+/**
+ * 개정 격자의 조작 버튼. 🔴 **칸이 버튼이던 구조를 버렸다** — `actions` 가 조작별이 된 순간
+ * "칸 = 조작 하나"가 깨졌고(입출구는 조작이 둘), **버튼 안에 버튼을 넣을 수 없다**(설계서 §4.2).
+ *
+ * 🔑 **예약·취소는 옛 경로를 그대로 다시 쓴다**(`requestReserve`/`requestCancel`).
+ * 그러면 **확인 대화상자 · 낙관적 UI · 롤백 · `queued`/`ack_budget_ms` 타이머 · 아이들 1초**가
+ * **한 줄도 다시 안 만들어진다.** 자리 지시자도 옛 요청 형식(`slot`)을 그대로 쓴다 —
+ * ⚠ **개정에서 낱말이 `zone` 으로 갈렸지만 요청 키가 바뀌는지는 계약에 없다.**
+ * **확정된 것(`slot`)을 쓰는 것이 짐작하지 않는 쪽**이고, 그래야 **옛 서버와 새 서버가 같은 요청을 받는다.**
+ */
+el.zoneGrid.addEventListener('click', function (event) {
+  const btn = event.target.closest('.zbtn');
+  if (!btn) return;
+  const zoneId = btn.dataset.zone, act = btn.dataset.act;
+
+  /* `aria-disabled` 는 클릭을 막지 않는다 — 막으면 이유를 들을 수 없다(§3.2 의 그 이유). */
+  if (btn.getAttribute('aria-disabled') === 'true') {
+    showMessage(zoneId + ' · ' + (btn.title || '지금은 할 수 없습니다'), 'info');
+    return;
+  }
+  if (act === 'reserve') { requestReserve(zoneId); return; }
+  if (act === 'cancel')  { requestCancel(zoneId);  return; }
+
+  /* 🔴 ~~`open_gate`/`close_gate` 분기~~ **제거했다** — `ACTION_LABEL` 의 주석에 근거가 있다.
+     ⚠ 여기 오는 일 자체가 없어야 정상이다(버튼이 안 그려지므로). 그래도 **분기를 되살리지 마라** —
+     아래 문구가 *"화면이 이 조작을 보낼 줄 모른다"* 라고 정확히 말한다. 그게 지금 참이다. */
+
+  /* 🔴 닫힌 집합 밖은 애초에 버튼이 안 그려진다. 여기 오면 **내 표가 어긋난 것**이다 —
+     조용히 넘기지 않고 말한다(다음 사람이 코드에서 원인을 찾지 않게). */
+  showMessage(zoneId + ' · ' + (ACTION_LABEL[act] || act)
+    + ' — 화면이 이 조작을 보낼 줄 모릅니다 (표가 어긋났습니다)', 'err');
+});
+
+/* 🔴 ~~`requestZoneAction()` — 자리 단위 차단봉 조작~~ **제거했다**
+   (사용자 확정 2026-08-20: *"특정 모듈 gate 같은 기능은 제거하라. control 로 통일한다."*)
+
+   부르는 곳이 없어져서 지운다 — **남겨 두면 다음 사람이 "이 경로는 왜 안 쓰이나"를 쫓는다**(루트 지시).
+   근거와 기전은 `ACTION_LABEL` 의 주석에 있다(서버는 닫기=0, 장치는 닫기=2 로 갈렸다).
+
+   ✅ **여기 있던 판단 하나는 `control` 경로에 그대로 살아 있다**:
+   *"차단봉은 물리 동작이라 낙관적 UI 를 쓰지 않는다. 화면은 보냈다만 말하고 진짜 상태는 에코로 온다."*
+   → `sendModuleCmd()` 도 값을 미리 안 바꾸고 `confirmed`/`cmd_result` 를 기다린다. **원칙이 옮겨졌다.** */
+
+/* ────────────────────────────────────────────────────────────────
+   7. 서버 메시지 처리 (§5.3)
+   ──────────────────────────────────────────────────────────────── */
+
+/* ════════════════════════════════════════════════════════════════
+   개정 봉투 둘 — `map`(지형) · `state`(상태) · `get_map`(재청)
+   원본: socket `docs/net/DESIGN-bridge-node-module-zone.md` §6.8. **값이 갈리면 원본이 이긴다.**
+   ⚠ **이름을 내가 만들지 않았다** — `map`·`state`·`get_map`·`epoch`·`grid`·`zones`·`cells` 전부 명세 것이다.
+   ════════════════════════════════════════════════════════════════ */
+
+/** 지형 사본이 지금 그릴 수 있는 상태인가. 🔴 낡았으면 **그리지 않는다**(옛 사본으로 안 그린다). */
+function mapUsable() {
+  return !!state.map && !state.mapStale;
+}
+
+/**
+ * `map` 을 다시 청한다. 응답은 **같은 `map` 봉투**로 온다(명세: 다른 타입을 만들지 않았다).
+ * ⚠ **무한 재요청을 화면 쪽에서도 막는다.** 서버에 상한이 있지만 그건 **서버 보호용**이고,
+ *    `epoch` 비교를 내가 잘못 구현하면 매 `state` 마다 청하게 된다 — 그 고리를 여기서 끊는다.
+ */
+function requestMap(force) {
+  const now = Date.now();
+  /* 🔴 **세계가 바뀐 것은 고리가 아니다.** `srv_id` 가 달라진 순간의 재청은 **간격 제한을 통과한다** —
+     막으면 재기동 직후 최대 2초간 화면이 낡은 채로 남는다(하니스가 실제로 그걸 잡았다).
+     ⚠ 그래도 `mapAskedAt` 은 갱신하므로 **뒤따르는 재청은 제한을 받는다.** */
+  if (!force && now - state.mapAskedAt < MAP_ASK_MIN_MS) return false;
+  state.mapAskedAt = now;
+  transport.send({ type: 'get_map', rid: newRid() });
+  return true;
+}
+
+/**
+ * 지형을 받는다. **검증에서 짐작하지 않는다** — 빠진 값을 기본값으로 메우지 않는다.
+ * 🔴 `grid.rows`/`cols` 가 없으면 **5×5 로 가정하지 않는다.** `5×5` 는 **설정의 기본값**이고
+ *    화면이 아는 값이 아니다(원장 §5.42). 짐작하면 **없는 격자를 그리게 된다.**
+ */
+function applyMap(msg) {
+  const g = msg && msg.grid;
+  const rows = g && Number(g.rows), cols = g && Number(g.cols);
+  const okGrid = Number.isFinite(rows) && rows > 0 && Number.isFinite(cols) && cols > 0;
+  const okEpoch = Number.isFinite(Number(msg.epoch));
+  if (!okGrid || !okEpoch || !Array.isArray(msg.zones)) {
+    showMessage('맵 정의를 이해하지 못했습니다 (격자 크기·판 번호·자리 목록 중 빠진 것이 있습니다)', 'err');
+    return;
+  }
+  /* 🔑 `srv_id` 가 다르면 **새 서버다. 판 비교를 하지 않고 무조건 받아들인다**(socket 확정).
+     같으면 그 안에서만 단조가 성립한다. **범위를 값으로 실어 받으므로 화면이 안 잊는다** —
+     *"재접속 때 판을 버려야 한다"* 를 규칙으로 두면 그건 두 곳에 있는 규칙이 된다. */
+  const sid = (typeof msg.srv_id === 'string' && msg.srv_id) ? msg.srv_id : null;
+  state.srvId = sid;
+  state.map = { epoch: Number(msg.epoch), rows: rows, cols: cols, zones: msg.zones.slice() };
+  state.mapStale = false;
+  state.olderRun = 0;
+
+  /* 🔑 보관해 둔 `state` 가 **이 지형의 것이면** 지금 적용한다. 그러면 접속 순서가 어떻든
+     첫 화면이 상태를 갖는다 — **순서 의존이 사라진다.** ⚠ 세계(`srv_id`)와 판(`epoch`)이
+     둘 다 맞아야 한다. 하나라도 다르면 **딴 지형의 상태**이므로 버린다(섞으면 두 세대가 된다). */
+  const held = state.heldState;
+  state.heldState = null;
+  if (held && held.srvId === state.srvId && held.epoch === state.map.epoch) {
+    state.zoneState = { epoch: held.epoch, ts_ms: held.ts_ms, zones: held.zones };
+  }
+  render();
+}
+
+/**
+ * 상태를 받는다. 🔴 **`epoch` 비교가 계약이다** — 비교를 안 하면 이 장치는 없는 것과 같다(명세).
+ * 불일치면 **그리지 않고 `map` 을 다시 청한다.**
+ */
+function applyZoneState(msg) {
+  if (!Array.isArray(msg.zones) || !Number.isFinite(Number(msg.epoch))) return;
+  const ep = Number(msg.epoch);
+
+  /* 🔴 **먼저 세계를 확인한다.** `srv_id` 가 내 사본과 다르면 **판 번호는 비교 대상이 아니다** —
+     그때 단조 비교를 하면 **새 서버의 판 1을 "옛 프레임"으로 무시해 화면이 영영 안 갱신된다**
+     (socket 이 첫 배포 뒤 잡은 그 모드 · 재기동이 그 경로다). → **내 지형이 딴 세계 것이므로 버린다.** */
+  const sid = (typeof msg.srv_id === 'string' && msg.srv_id) ? msg.srv_id : null;
+  if (state.map && sid !== state.srvId) {
+    state.mapStale = true;
+    state.zoneState = null;
+    state.olderRun = 0;
+    /* 새 세계의 상태다 — 그 세계의 `map` 이 오면 쓸 수 있으므로 보관한다. */
+    state.heldState = { srvId: sid, epoch: ep, ts_ms: Number(msg.ts_ms) || null, zones: msg.zones.slice() };
+    requestMap(true);          // 세계가 바뀌었다 — 즉시 청한다
+    render();
+    return;
+  }
+
+  /* 🔑 **`epoch` 은 단조 증가다**(socket 명세 §6.8). 그 성질을 쓰면 불일치를 **두 경우로** 가른다 —
+     ~~예전에는 `!==` 하나로 묶었다~~ 가 그건 필요 이상으로 엄격했다.
+
+     ① `ep > 내 판` : **내 지형이 낡았다** → 그리지 않고 재청한다
+     ② `ep < 내 판` : **늦게 도착한 옛 프레임**이다 → 🔴 **내 지형은 멀쩡하다.**
+        묶어서 다루면 **그 한 장 때문에 화면이 깜빡 비고**(담아 둔 상태를 버린다) **이미 가진
+        맵을 다시 청한다.** 둘 다 불필요하다 → **그냥 무시한다.**
+
+     ⚠ **①에서 그리지 않는 것은 그대로다**: 판이 다른 상태를 그리면 **두 세대를 섞는다.**
+
+     🔴 **이 최적화는 socket 의 단조 보장 위에 서 있다**(루트 지적). **그쪽이 감소 경로를 만들면
+     내가 조용히 깨진다** — 그래서 의존을 여기 적는다(가드가 사례 [7] 에 의존하는 것과 같은 형태).
+
+     ⚠ **그리고 조용한 실패 모드가 하나 있다**: 판이 **계속 작게만** 오면 위 줄이 **전부 무시**해서
+     **화면이 옛 지형으로 얼어붙고 재청도 안 한다.** 예: 서버가 재시작해 판이 1로 되돌아갔는데
+     내 사본이 7 인 경우. 🔑 **보통은 재접속 때 `map` 이 다시 와서 사본이 1로 맞춰진다** —
+     즉 이 모드는 **`map` 없이 판이 되돌아갈 때만** 생긴다. 드물지만 **드문 것과 없는 것은 다르다.**
+     → **연속으로 무시한 횟수를 센다.** 임계를 넘으면 **한 번 재청한다**(재청은 멱등이고 간격 제한이 있다).
+     ⚠ 이것은 서버 값을 짐작하는 것이 아니라 **내 최적화의 폭발 반경을 스스로 묶는 것**이다. */
+  if (state.map && ep < state.map.epoch) {
+    state.olderRun = (state.olderRun || 0) + 1;
+    if (state.olderRun >= OLDER_RUN_MAX) {
+      /* 얼어붙는 것보다 한 번 묻는 것이 낫다. 이유를 로그가 아니라 **화면에** 남기지는 않는다 —
+         정상 경로에서도 한두 장은 늦게 올 수 있어 그건 사용자에게 알릴 일이 아니다. */
+      state.olderRun = 0;
+      state.mapStale = true;
+      state.zoneState = null;
+      requestMap();
+      render();
+    }
+    return;                                        // ② 늦게 온 옛 프레임 — 그리지 않는다
+  }
+  state.olderRun = 0;
+
+  if (!state.map || ep !== state.map.epoch) {
+    /* 🔴 옛 사본으로 계속 그리지 않는다. **낡았다는 것을 알면서 그리는 것은 모르고 그리는 것보다
+       나쁘다 — 알고도 숨긴 것이다**(내 §5.34 의 형태 · socket 이 이 규율을 채택했다). */
+    state.mapStale = true;
+    state.zoneState = null;
+    /* 🔴 **버리지 말고 보관한다.** 실기에서 접속 순서가 `state` → `map` 이었고, 버리면
+       **다음 `state` 를 기다려야 하는데 장치가 없으면 그게 안 온다**(측정 2026-08-19). */
+    state.heldState = { srvId: sid, epoch: ep, ts_ms: Number(msg.ts_ms) || null, zones: msg.zones.slice() };
+    requestMap();
+    render();
+    return;
+  }
+  state.zoneState = { epoch: ep, ts_ms: Number(msg.ts_ms) || null, zones: msg.zones.slice() };
+  render();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   개정 격자 렌더링 — 맵 정의 기반
+   ════════════════════════════════════════════════════════════════ */
+
+/** 닫힌 집합 넷(socket 명세 §6.8). 🔴 **여기 없는 조작 키는 조용히 무시한다** — 그러면
+    서버가 조작을 추가해도 옛 화면이 안 깨진다(§5.13 성질을 `actions` 안에서도 갖는 것). */
+const ACTION_LABEL = {
+  reserve:    '예약',
+  cancel:     '예약 취소'
+  /* 🔴 ~~`open_gate` · `close_gate`~~ **제거했다** (사용자 확정 2026-08-20: *"특정 모듈 gate 같은
+     기능은 제거하라. control 로 통일한다."*).
+
+     **왜 없앴나 — 실기에서 갈렸다:**
+       서버 게이트 경로: 닫기 = **0**   ·   장치 명령표: 닫기 = **2**
+       → `close_gate` 가 `G,…,4,0` 을 보냈고 장치가 **result=3** 으로 거절했다.
+       🔑 **열기(=1)가 우연히 같아서 안 보였고 닫기에서 갈렸다.**
+
+     > **값의 뜻을 아는 것은 기여자뿐이다. 서버가 "차단봉은 1/0"이라고 정하는 순간
+     >  그 가정은 다음 기여자에게서 깨진다.**
+
+     🔑 **이 표가 버튼을 그리는 유일한 문지기다**(`renderZone` 이 `if (!ACTION_LABEL[key]) continue`).
+     그래서 여기서 지우면 서버가 그 키를 계속 보내도 **버튼이 안 그려진다.**
+     ⚠ **지우지 않고 이 주석을 남기는 이유**: 없앴다는 사실과 그 근거가 같이 사라지면
+     다음 사람이 *"차단봉 버튼이 왜 없지"* 를 결함으로 읽고 되살린다.
+     → 지금 유일한 조작 경로는 **`mod.control` → `send_cmd`** 다. 차단봉을 조작하려면
+     기여자가 `lot.control("P1","DR").choice(...)` 로 **선언**해야 한다.
+     **선언 안 한 모듈은 꺼진 것이고, 그게 맞는 동작이다.** */
+};
+
+/**
+ * ✅ 모듈 `kind` — **전선 코드를 JSON 에도 그대로 쓴다**(socket 확정 · 커밋 `17eac86`).
+ * 🔑 **서버가 번역하지 않는다.** 한글은 **표시 이름**이고 그 사상은 **여기 한 곳에만** 있다 —
+ * 두 홉이 아니라 한 홉이다. (번역이 서버에도 있으면 사상이 두 벌이 되고 한쪽만 고치는 날이 온다.)
+ */
+const MOD_KIND_LABEL = {
+  IP: '주차확인센서', IX: '입출차센서',
+  OG: '안내등', OL: '유도등', OB: '차단봉'
+};
+
+/**
+ * 표시 순서 — **표시는 내 몫이고 방향은 계약이다**(socket).
+ * 🔑 **관측(`I…`) 먼저, 출력(`O…`) 나중**으로 뒀다. 근거: **관측은 자리의 상태를 정하고
+ * 출력은 그 결과를 되비춘 것**이라, 위에서 아래로 읽으면 원인 → 결과가 된다.
+ * ⚠ `idx` 를 쓰지 않는다 — 그건 **배선 순서**라 배선을 바꾸면 화면이 조용히 재배열된다(socket ④).
+ * 모르는 `kind` 는 **도착 순서 그대로 뒤에 붙는다**(안정 정렬).
+ */
+const MOD_KIND_ORDER = ['IP', 'IX', 'OB', 'OG', 'OL'];
+
+/**
+ * 🔴 **자리 표시 이름 — 이 표가 유일한 사상이다** (REQ-0269 · 사용자 확정).
+ *
+ * `Zone.id` 는 **전선에 나가는 예약 id** 라 안 바뀐다(`R,<rid>,<id>`). 화면에만 이름을 입힌다.
+ *
+ * ⚠ **2단계에서 이 표는 통째로 사라진다** — 사용자가 나중에 `id` 자체를 `영역1~5` 로 바꾸기로 했고
+ * 그건 arduino 굽기와 같은 경계에서 한다. 🔑 **그래서 사상을 여기 한 곳에만 뒀다.**
+ * **여기저기 흩어 두면 그때 지울 곳을 못 찾는다**(루트 지시).
+ *
+ * 🔴 **표에 없는 id 는 지어내지 않고 id 를 그대로 쓴다.** `B*` 는 여기 없다 —
+ * 자리가 5개가 되면 `B*` 는 **영역이 아니라 같은 자리의 둘째 센서**가 되기 때문이다(REQ-0269 §1).
+ * ⚠ 그때까지(지금 12영역 지형) `B1` 은 화면에 `B1` 로 뜬다. **그것이 정직한 표시다** —
+ * 없는 이름을 붙이면 사용자가 `영역6` 같은 것을 보게 된다.
+ */
+const ZONE_LABEL = {
+  A1: '영역1', A2: '영역2', A3: '영역3', A4: '영역4', A5: '영역5',
+  E1: '입구',  X1: '출구'
+};
+/** 표시 이름. 🔑 **없으면 id 를 그대로 준다** — 빈 문자열이나 물음표를 만들지 않는다. */
+/**
+ * 🔴 **모듈 표시 이름 — 폴백 순서를 여기 한 곳에만 둔다** (socket 2026-08-20).
+ *   ① `mod.label`(기여자 선언) → ② `MOD_KIND_LABEL[kind]`(내 표) → ③ `mod.name`(전선 이름)
+ * ⚠ **빈칸이 되면 안 된다** — 이름 없는 줄은 사용자가 무엇을 조작하는지 모른다(루트 지시).
+ * 🔑 규칙을 두 곳(행·조작 UI)에 복사하면 **판정자가 둘**이 된다. 그래서 함수 하나다.
+ */
+function modLabelOf(mod) {
+  if (mod && typeof mod.label === 'string' && mod.label) return mod.label;
+  return (mod && MOD_KIND_LABEL[baseKind(mod.kind)]) || (mod && mod.name) || '(이름 없음)';
+}
+
+/** 🔴 **자리 이름의 정본은 `zone.label`** 이다(socket 2026-08-20 · `lot.spot("A1").label("1번 자리")`).
+    폴백 순서: `zone.label` → 내 `ZONE_LABEL` 표 → `zone.id`.
+    🔑 **이 표가 폴백으로 내려간 것이 예정된 2단계다** — 원장 §5.89 에 *"기여자가 이름을 갖게 되면
+    이 표는 사라진다"* 고 적어 뒀다. 기여자가 전부 선언하면 표를 지운다. */
+function zoneLabel(z) {
+  if (z && typeof z.label === 'string' && z.label) return z.label;
+  const id = (z && z.id) || z;
+  return ZONE_LABEL[id] || id;
+}
+/** 표시 이름이 id 와 다른가(= 부제로 id 를 따로 보여 줘야 하는가). */
+function zoneHasLabel(z) {
+  if (z && typeof z.label === 'string' && z.label) return z.label !== z.id;
+  const id = (z && z.id) || z;
+  return !!ZONE_LABEL[id];
+}
+
+/**
+ * 🔴 **출력 모듈 판정은 표가 아니라 규칙이다**(socket): **`kind[0] === 'O'`.**
+ * → **어긋날 표가 없다.** 그리고 **모르는 `kind` 는 자동으로 `*` 가 안 붙는다**(`O` 가 아니므로) —
+ *   내가 고른 보수적 처리와 같은 결론이고 **이제 관용이 아니라 계약이다.**
+ * ⚠ **`O` 를 "사용자가 누를 수 있다"로 읽지 않는다.** 안내등(`OG`)은 명령을 받지만 그 명령은
+ *   서버가 예약 상태에서 파생시킨다. **누를 수 있는가는 `actions` 가 답한다 — 다른 축이다.**
+ */
+function isOutputKind(kind) {
+  return typeof kind === 'string' && kind.charAt(0) === 'O';
+}
+
+/**
+ * 🔴 **`kind` 계약이 좁아졌다** (socket 확정 2026-08-20):
+ *   **첫 글자만 계약**이다 — `I…` = 관측(입력) · `O…` = 출력(조작 가능).
+ *   **나머지 글자는 기여자 자유**이고 **서버도 화면도 해석하지 않는다.**
+ *
+ * 🔴 ~~`V` 접미 = 가상 모듈~~ **제거했다.** 두 각도가 같은 답을 냈다(socket 재조사):
+ *   ① 펌웨어에 kind 로 `V` 를 내보내는 자리가 **없다** · ② 실기 로그가 `OB`·`OG`·`IP` — **접미가 없다**
+ *   → **아무도 안 보내는 규칙을 계약에 새길 뻔했다.** 그 코드는 **한 번도 안 밟히고 있었다.**
+ *
+ * 🔑 그리고 `V` 접미는 **오늘 계속 만난 그 결함**이다 — *한 이름이 두 뜻을 겸한다.*
+ *   `OB`+`V` 는 **종류와 가상 여부를 한 문자열에** 담았고, **값이 갈리기 전까지 안 보인다.**
+ *   내가 든 사례가 그 순간이다: 기여자가 `OV`(출력·밸브)라고 쓰면 화면이 **"가상"이라고 거짓말**한다.
+ *   ⚠ **오류가 아니라 그럴듯한 틀린 표시**라서 더 나쁘다.
+ *
+ * ⏳ **닫는 조건 있는 보류**: 가상 모듈이 다시 필요해지면 **별도 키**로 만든다(socket 합의).
+ *   🔴 **접미 글자로 뜻을 나르지 않는다.**
+ */
+function baseKind(kind) {
+  /* 라벨 폴백표를 찾을 때만 쓴다. 🔑 **뜻을 해석하는 게 아니라 표를 찾는 것**이다 —
+     표에 없으면 그냥 폴백이 다음으로 넘어간다(`mod.name`). */
+  return kind;
+}
+
+/** `blocked_reason` 코드 → 계열. 🔴 계열은 **서버가 코드에 실어 준 것**이고 화면이 짐작하지 않는다. */
+/* 🔴 **사유 코드는 이름공간이 둘이다** (socket 정정 2026-08-19 · 명세 §8):
+   ```
+   actions[].reason  (state 의 자리별) : node_offline · node_unregistered · module_absent · pending
+   err.reason        (요청 거절 응답)  : bad_request · device_offline · not_supported · module_absent
+                                        rate_limited · queue_full · already_pending · ack_timeout
+   ```
+   ⚠ **같은 개념에 다른 이름이 있다**: `device_offline`(err) ↔ `node_offline`(actions) ·
+   `already_pending`(err) ↔ `pending`(actions). **한 표로 다루면 같은 상태가 두 칸에 들어간다.**
+   🔑 내 코드는 **쓰임으로 이미 갈려 있다** — 이 표는 `actions` 전용(`familyOf` 는 `a.reason` 에만
+   쓰인다)이고 err 는 `ERROR_TEXT` 가 받는다. **그래서 아래 `queue_full` 항목은 죽은 항목이었다.**
+   ⚠ 통일은 다음 개정이다(전선 값을 바꾸면 내 코드가 깨진다 · socket 판단). **지금은 사실만 적어 둔다.** */
+const REASON_FAMILY = {
+  node_offline: 'unknown', node_unregistered: 'unknown',
+  module_absent: 'fault',
+  pending: 'busy',
+  /* 🔴 **`occupied` 는 계열이 `normal` 이다** (socket REQ-0235 로 계약에 추가 · 2026-08-19).
+     ⚠ **socket 의 제안은 `unknown`(⏱ 기다리면 풀린다)이었다. 안 받았다.** 근거:
+     ```
+     ① 우리는 이유를 **안다** — 차가 있다. `unknown` 은 *"조작 판정을 할 수 없다"* 이고 거짓이 된다
+     ② 🔴 배너가 `unknown` 을 센다 → **정상 운영에서 계속 뜬다.** 배너의 규칙은
+        **"정상에서 침묵한다"**(설계서 §6)인데, 주차장에 차가 있는 것은 정상이다
+     ③ `busy`(⏳ 곧 풀린다)도 아니다 — 주차는 몇 시간일 수 있다
+     ```
+     🔑 **이건 이상이 아니라 정상 상태다.** 그래서 **표식을 안 붙이고 집계에도 안 넣는다** —
+     칸이 이미 *"사용 중"* 이라 말하고 있고, 버튼이 닫힌 이유가 그 자체로 설명된다.
+     🔑 §5.59 기준(*"붙어 있을 때를 기준으로"*)을 적용하면 오히려 **`unknown` 이 가장 나쁘다** —
+     오래 붙어 있는 상태를 ⏱ 로 그리면 **⏱ 의 뜻이 닳는다**(진짜 미상이 묻힌다).
+     ⚠ 계약상 키는 **남아 있다**(`ok:false` + 사유). 차가 나가면 예약이 가능해지므로
+     socket 이 키를 빼지 않은 것이 맞다 — **일시 상태를 영구로 답하지 않는다.** */
+  occupied: 'normal'
+  /* ~~`queue_full: 'busy'`~~ — **err 이름공간의 코드다.** `actions` 에는 안 실린다.
+     지우지 않고 남기는 이유: 내가 한 표로 다뤘다는 사실이 다음 사람에게 근거가 된다. */
+};
+const REASON_TEXT = {
+  node_offline:      '그 장치에서 프레임이 오지 않습니다',
+  node_unregistered: '그 장치가 아직 모듈 목록을 알려 주지 않았습니다',
+  module_absent:     '이 자리에 필요한 모듈이 없습니다',
+  pending:           '이 자리의 앞선 요청이 아직 처리 중입니다',
+  queue_full:        '지금 전송 대기가 가득 차 접수하지 못했습니다',
+  /* 🔑 **고장처럼 읽히지 않게 쓴다.** 이건 정상 상태이고, 사용자가 할 일은 **기다리는 것**이지
+     확인하거나 다시 누르는 것이 아니다. 그리고 **왜 풀리는지**를 같이 말한다. */
+  occupied:          '이 자리에는 지금 차가 있습니다 — 나가면 예약할 수 있습니다',
+
+  /* 🔴 모듈 직접 조작(SPEC-web-control §5). **이름은 socket 명세 그대로다 — 하나도 안 지어냈다.**
+     ⚠ 셋(`not_declared`·`out_of_range`·`batch_too_big`)만 새것이고 나머지는 기존 어휘를 재사용한 것이다. */
+  device_offline:    '그 장치가 붙어 있지 않습니다',
+  bad_request:       '요청 형식이 올바르지 않습니다',
+  not_supported:     '이 모듈은 직접 조작 대상이 아닙니다',
+  rate_limited:      '너무 자주 보냈습니다 — 잠시 뒤 다시 시도해 주세요',
+  ack_timeout:       '장치가 응답하지 않았습니다',
+  not_declared:      '이 모듈은 조작 가능하도록 선언되어 있지 않습니다',
+  out_of_range:      '선언된 범위를 벗어난 값입니다',
+  batch_too_big:     '한 번에 보낼 수 있는 개수를 넘었습니다',
+  /* 🔴 **전선 뒤 거절** — 명령이 나갔고 **장치가 답해서** 거절했다(SPEC §3.3 · socket 2026-08-20).
+     ⚠ 위의 `not_declared`·`out_of_range` 와 **사람이 할 일이 다르다**: 저쪽은 요청을 고치는 것이고
+     이쪽은 **장치 쪽 상태**다. 재시도는 뜻이 없다 — 같은 답이 온다. */
+  device_refused:    '장치가 이 명령을 거절했습니다'
+};
+/** 계열 → 기호. 🔑 기호는 **원인**이고 강조는 **영향**이다(두 축 · 원장 §5.33). */
+const FAMILY_MARK = {
+  unknown: '⏱', fault: '⚠', busy: '⏳',
+  /* 🔴 `normal` 은 **기호가 없다.** 정상 상태에 표식을 붙이면 **표식의 뜻이 닳는다** —
+     화면 어디에나 기호가 있으면 사용자가 그것을 배경으로 읽고, 진짜 이상을 못 본다. */
+  normal: ''
+};
+
+function familyOf(code) { return REASON_FAMILY[code] || (code ? 'fault' : null); }
+
+/** 모듈 표시 순서 — `idx` 를 쓰지 않는다(그건 비트열 자리이고 **배선 순서**다 · socket ④). */
+function orderedModules(mods) {
+  const list = Array.isArray(mods) ? mods.slice() : [];
+  return list.map(function (m, i) { return { m: m, i: i }; })
+    .sort(function (a, b) {
+      /* 🔑 `V` 를 떼고 순위를 본다 — 안 떼면 `OBV` 가 `-1` 이 되어 **차단봉이 목록 맨 뒤로 밀린다.**
+         가상이든 실물이든 **같은 종류는 같은 자리에 있어야** 사용자가 비교할 수 있다. */
+      /* 🔴 **첫 글자만 본다** (socket 2026-08-20 · kind 계약이 첫 글자로 좁아졌다).
+         `I…`(관측) 먼저, `O…`(출력) 나중 — 위에서 아래로 읽으면 **원인 → 결과**가 된다.
+         🔑 **그룹 안은 `z.modules` 배열 순서**, 곧 **기여자가 `lot.cpp` 에 적은 순서**다.
+            알파벳보다 기여자 의도에 가깝고, 둘째 글자를 해석하지 않는다.
+         ⚠ `idx`(배선 순서)는 여전히 안 쓴다 — 배선을 바꾸면 화면이 조용히 재배열된다. */
+      const rank = (k) => (typeof k === 'string' && k.charAt(0) === 'O') ? 1 : 0;
+      const ra = rank(a.m && a.m.kind), rb = rank(b.m && b.m.kind);
+      return ra !== rb ? ra - rb : a.i - b.i;   // 같은 그룹이면 선언 순서 유지(안정 정렬)
+    })
+    .map(function (x) { return x.m; });
+}
+
+function zoneStateById() {
+  const out = new Map();
+  const zs = state.zoneState && state.zoneState.zones;
+  if (Array.isArray(zs)) for (const z of zs) if (z && z.id) out.set(z.id, z);
+  return out;
+}
+
+/**
+ * 격자를 그린다. 🔴 **`map` 이 없거나 낡았으면 그리지 않는다** — 옛 경로가 화면을 맡는다.
+ * 그리고 셋을 다르게 그린다: **빈 칸**(zone 이 없다) · **미상 자리**(zone 은 있고 상태를 모른다) ·
+ * **정상 자리**. 이 구분은 **맵 정의가 상태와 별개로 오기 때문에** 가능하다(§5.32 ①).
+ */
+function renderZoneGrid() {
+  const on = mapUsable();
+  el.zoneGrid.hidden = !on;
+  el.grid.hidden = on;
+  if (el.gridHead) el.gridHead.hidden = on;
+  if (!on) return;
+
+  const m = state.map;
+  el.zoneGrid.style.setProperty('--zcols', String(m.cols));
+  const byCell = new Map();
+  for (const z of m.zones) {
+    const cells = Array.isArray(z.cells) ? z.cells : [];
+    /* 🔑 `cells` 를 **순회한다.** 지금은 길이 1이지만 순회하면 N:1 이 와도 이 코드가 안 바뀐다.
+       `cells[0]` 을 고르면 그때 **말없이 첫 칸만 그린다**(socket ⑤). */
+    for (const c of cells) if (Array.isArray(c) && c.length >= 2) byCell.set(c[0] + ',' + c[1], z);
+  }
+  const st = zoneStateById();
+
+  /* 🔴 **포커스를 보존한다.** 이 함수는 격자를 **통째로 다시 만든다**(바로 아래 `textContent = ''`).
+     그래서 다시 그릴 때마다 **포커스가 사용자 발밑에서 사라진다** — `state` 가 초당 한 장 오므로
+     **이미 초당 한 번** 그랬고(있던 결함), 아이들 표시를 넣으면서 150ms 티커가 도는 1초 동안
+     **일곱 번** 그렇게 된다.
+     🔑 이걸 안 고치면 `aria-disabled` 를 쓴 이유가 무너진다 — 진짜 `disabled` 대신 그것을 쓴 것은
+     **키보드·스크린리더가 버튼에 닿아 "왜 못 누르는지"를 듣게** 하려는 것인데(§3.2),
+     버튼이 파괴되면 읽던 중에 초점이 몸통으로 떨어진다. **누른 직후가 정확히 그 순간이다.**
+     ⚠ 격자 안에 포커스가 있었을 때만 되돌린다 — 아니면 남의 포커스를 훔친다. */
+  const af = document.activeElement;
+  const keep = (af && af.classList && af.classList.contains('zbtn') && el.zoneGrid.contains(af))
+    ? { zone: af.dataset.zone, act: af.dataset.act } : null;
+
+  /* 🔴🔴 **입력 칸은 사용자 소유다. 서버 값으로 절대 덮지 않는다.** (사용자 실측 2026-08-20)
+     증상: *"LC 에 타임사이클이 같이 돈다. 입력을 하는 중간에 글자가 없어진다."*
+     기전: 이 함수는 격자를 **통째로 다시 만드는데**(바로 아래 `textContent = ''`),
+           `state` 가 **초당 한 장** 온다. 그래서 사용자가 7자리를 치는 동안 **입력 칸이 파괴되고
+           새 빈 칸으로 바뀐다.** 🔑 **LED(toggle)가 멀쩡했던 이유가 이것이다** — 그쪽은
+           들고 있을 입력 상태가 없어서 다시 만들어도 잃을 것이 없다.
+     ⚠ **버튼 포커스 보존(위)만으로는 못 막는다** — 포커스를 되돌려도 **값은 이미 사라졌다.**
+     🔑 그래서 **값과 캐럿 위치**를 같이 안고 넘어간다. 서버 값은 이 칸에 안 넣는다 —
+        `requested`/`value` 는 **옆 상태 줄**에 따로 보인다(그게 화면이 서버를 말하는 자리다). */
+  const typed = new Map();
+  let caret = null;
+  for (const inp of el.zoneGrid.querySelectorAll('.zctl__num')) {
+    const k = inp.dataset.modKey + '|' + inp.dataset.role;
+    if (inp.value !== '') typed.set(k, inp.value);
+    if (inp === af) {
+      caret = { key: k, start: inp.selectionStart, end: inp.selectionEnd };
+      /* `<input type=number>` 는 selectionStart 를 안 줄 수 있다 — 그러면 캐럿은 포기하고
+         **값과 포커스만** 지킨다. 값이 살아 있으면 사용자는 이어서 칠 수 있다. */
+    }
+  }
+
+  el.zoneGrid.textContent = '';
+  /* 🔴 **자리를 두 번 그리지 않는다.** `cells` 가 둘 이상이면 예전 코드는 **칸마다 자리를 통째로
+     다시 그렸다** — 같은 자리에 **예약 버튼이 두 개** 생기고 노드 박스도 두 벌이 된다.
+     ⚠ 지금 지형(모든 `cells` 길이 1)에서는 안 보이지만 **socket 이 강제를 푸는 순간 드러난다**(REQ-0269).
+     🔑 그래서 **처음 만난 칸에서 한 번만 그리고**, 같은 행에서 연속이면 `span` 으로 늘린다.
+        연속이 아니면 나머지 칸은 **"이어짐" 표시**로 둔다 — 빈 칸(자리 아님)과 구분되어야 한다. */
+  const drawn = new Set();
+  const runOf = (z, r, c) => {          /* 이 칸에서 오른쪽으로 이어지는 같은 자리의 길이 */
+    let n = 0;
+    while (byCell.get(r + ',' + (c + n)) === z) n += 1;
+    return n;
+  };
+  const cellCount = (z) => (Array.isArray(z.cells) ? z.cells : []).filter(
+    (x) => Array.isArray(x) && x.length >= 2).length;
+  for (let r = 0; r < m.rows; r++) {
+    for (let c = 0; c < m.cols; c++) {
+      const li = document.createElement('li');
+      const z = byCell.get(r + ',' + c);
+      if (z && drawn.has(z.id)) {
+        /* 이미 그린 자리의 나머지 칸. **자리이긴 한데 여기서 또 그리지 않는다.** */
+        li.className = 'zcell--cont';
+        li.setAttribute('aria-hidden', 'true');
+        li.title = zoneLabel(z) + ' (' + z.id + ') 가 이어지는 칸입니다';
+        el.zoneGrid.appendChild(li);
+        continue;
+      }
+      if (z) {
+        const run = runOf(z, r, c);
+        /* 같은 행에서 그 자리의 **모든** 칸이 연속일 때만 `span` 으로 늘린다.
+           일부만 연속이면 늘리지 않고 나머지는 위의 "이어짐"이 받는다. */
+        if (run > 1 && run === cellCount(z)) li.style.gridColumn = 'span ' + run;
+        drawn.add(z.id);
+        el.zoneGrid.appendChild(renderZone(li, z, st.get(z.id) || null));
+        continue;
+      }
+      if (!z) {
+        /* 🔴 빈 칸은 **자리가 아니다.** `"상태 미상"` 을 쓰지 않는다 — 존재하지 않는 것을
+           "모른다"고 말하는 것이고 §6 집계가 빈 칸 수로 튄다(설계서 §5.1). */
+        li.className = 'zcell--empty';
+        li.setAttribute('aria-hidden', 'true');
+        el.zoneGrid.appendChild(li);
+        continue;
+      }
+      el.zoneGrid.appendChild(renderZone(li, z, st.get(z.id) || null));
+    }
+  }
+  /* 같은 자리·같은 조작의 버튼이 다시 있으면 거기로 되돌린다. 없어졌으면(조작이 사라졌으면)
+     아무것도 하지 않는다 — 엉뚱한 버튼으로 옮기면 **다음 엔터가 다른 것을 누른다.**
+     ⚠ `querySelector` 에 자리 id 를 문자열로 끼우지 않는다(id 에 따옴표·괄호가 오면 깨진다).
+        dataset 을 직접 비교하는 것이 형식에 안 흔들린다. */
+  if (keep) {
+    for (const b of el.zoneGrid.querySelectorAll('.zbtn')) {
+      if (b.dataset.zone === keep.zone && b.dataset.act === keep.act) { b.focus(); break; }
+    }
+  }
+
+  /* 🔴 **치던 값을 되돌린다** — 위에서 안고 온 것. 이것이 없으면 초당 한 번 글자가 사라진다. */
+  for (const inp of el.zoneGrid.querySelectorAll('.zctl__num')) {
+    const k = inp.dataset.modKey + '|' + inp.dataset.role;
+    if (typed.has(k)) inp.value = typed.get(k);
+    if (caret && caret.key === k) {
+      inp.focus();
+      /* 캐럿 복원은 **되면 하고 안 되면 넘어간다.** `type=number` 는 브라우저에 따라
+         `setSelectionRange` 를 던진다 — 그때 값까지 잃으면 안 되므로 조용히 포기한다. */
+      try { if (caret.start !== null) inp.setSelectionRange(caret.start, caret.end); } catch (e) {}
+    }
+  }
+  renderZoneBanner(m, st);
+}
+
+/**
+ * 미상 집계 한 줄 — 🔴 **정상에서 침묵한다.**
+ *
+ * 세는 규칙(설계서 §6): **조작을 막는 미상만** 센다. 조작과 무관한 미상(안내등 등)은
+ * **칸 안에 조용히 남고 집계에는 안 들어간다** — 넣으면 **상시 켜진 경고**가 되고 아무도 안 읽는다
+ * (원장 §3.1 이 배너를 정상에서 침묵시킨 이유). `busy` 계열도 안 센다 — **곧 풀린다.**
+ *
+ * 🔴 **구현하면서 내 §6 규칙의 빈 칸을 찾았다**: `state` 에 **아예 없는 자리**는
+ * `blocked_reason` 도 없어서 `unknown` 계열 계수에 안 걸린다. **그런데 그게 가장 모르는 자리다** —
+ * 조작 가능성조차 모른다. → **둘을 같이 센다.** 규칙을 "코드가 미상 계열" 에서
+ * **"조작 판정을 할 수 없는 자리"** 로 넓혔다.
+ * ⚠ **빈 칸(zone 이 없는 좌표)은 세지 않는다** — 존재하지 않는 것은 미상이 아니다(설계서 §5.1).
+ */
+function renderZoneBanner(m, st) {
+  const box = el.slotsBanner;
+  const noState = [], blocked = [];
+  for (const z of m.zones) {
+    const zs = st.get(z.id);
+    if (!zs) { noState.push(z.id); continue; }
+    if (zoneBlockedByUnknown(zs)) blocked.push(z.id);
+  }
+  const all = noState.concat(blocked);
+  if (all.length === 0) { box.hidden = true; return; }   // 🔑 정상에서 침묵
+  /* 기호는 원인(`⏱` 모른다)이고, 배너에 있다는 것 자체가 영향(조작을 막는다)이다 — 두 축(§5.33). */
+  box.textContent = '⏱ ' + all.length + '자리는 지금 조작 판정을 할 수 없습니다 ('
+    + all.join(' · ') + ')'
+    + (noState.length ? ' — ' + noState.length + '자리는 상태가 아직 오지 않았습니다' : '')
+    + (blocked.length ? ' — ' + blocked.length + '자리는 필요한 장치의 상태를 모릅니다' : '');
+  box.hidden = false;
+}
+
+function renderZone(li, z, zs) {
+  li.className = 'zone';
+  li.dataset.zone = z.id;
+  li.dataset.kind = z.kind || '';
+  li.dataset.usable = zs ? '1' : '0';
+
+  const head = document.createElement('div');
+  head.className = 'zone__head';
+  /* 🔴 **표시 이름이 앞, `id` 가 뒤**(REQ-0269). `id` 를 **감추지 않는다** —
+     그것이 예약 전선에 나가는 값(`R,<rid>,<id>`)이라 **사람이 로그와 화면을 맞출 수 있어야 한다.**
+     🔑 `.zone__id` 의 내용은 **여전히 날 id** 다 — 내 다른 하니스(`live-map`)가 이 칸으로 두 경로를
+     대조하기 때문에 여기에 표시 이름을 넣으면 그 대조가 조용히 깨진다. **표시는 새 칸에 담는다.** */
+  if (zoneHasLabel(z)) {
+    const nameEl = document.createElement('span');
+    nameEl.className = 'zone__name';
+    nameEl.textContent = zoneLabel(z);
+    head.appendChild(nameEl);
+  }
+  const idEl = document.createElement('span');
+  idEl.className = 'zone__id';
+  idEl.dataset.raw = z.id;
+  idEl.textContent = z.id;
+  idEl.title = zoneHasLabel(z)
+    ? (zoneLabel(z) + ' — 예약·명령에 쓰이는 자리 id 는 ' + z.id + ' 입니다 (로그와 맞출 때 이 값을 보세요)')
+    : (z.id + ' — 예약·명령에 쓰이는 자리 id 입니다');
+  const sum = document.createElement('span');
+  sum.className = 'zone__sum';
+  sum.textContent = zoneSummary(z, zs);
+  head.appendChild(idEl); head.appendChild(sum);
+  li.appendChild(head);
+
+  /* 🔴 **박스 안의 박스** — 영역 박스 > **노드 박스** > 모듈 리스트 (사용자 지시 · REQ-0261).
+     묶는 키는 **`devid`** 다. 한 영역에 여러 노드의 모듈이 들어올 수 있다
+     (`Zone.modules` 가 `(devid,name)` 벡터인 이유).
+     ⚠ **지금 지형은 영역당 노드 1대라 1:1 로 보인다.** 그렇다고 묶는 층을 빼면 안 된다 —
+     곧 영역 7개에 **영역1 ← A1·B1** 처럼 둘이 된다(REQ-0260). **퇴화형에 맞춰 줄이지 않는다.** */
+  const mods = orderedModules(z.modules);
+
+  const nodes = document.createElement('ul');
+  nodes.className = 'znodes';
+  nodes.setAttribute('role', 'list');
+
+  if (!mods.length) {
+    /* 🔴 **빈 영역을 정상처럼 그리지 않는다.** 모듈 0개는 "조용한 정상"이 아니라 **등록 전이거나
+       결속이 끊긴 것**이다. ⚠ 그런데 **화면은 그 둘을 가를 근거가 없다**(§5.34 의 형태) —
+       그래서 **"없다"는 말하되 원인은 단정하지 않는다.** 둘 중 하나로 적으면 그게 곧 지어낸 것이다. */
+    const none = document.createElement('li');
+    none.className = 'znode znode--empty';
+    none.textContent = '모듈 없음 — 등록 전이거나 결속이 끊겼습니다';
+    nodes.appendChild(none);
+  }
+
+  const byNode = new Map();
+  for (const mod of mods) {
+    /* `devid` 가 비어 오는 것은 계약 위반이지만, **그때 조용히 뭉뚱그리지 않는다** — 따로 보이게 둔다. */
+    const dv = (mod && mod.devid) || '(devid 없음)';
+    if (!byNode.has(dv)) byNode.set(dv, []);
+    byNode.get(dv).push(mod);
+  }
+  /* 🔑 **노드 정렬 규칙을 정한다.** 안 정하면 프레임마다 순서가 흔들려 눈이 못 따라간다(루트 지적).
+     `devid` 사전순이고, 노드 안의 모듈 순서는 `orderedModules` 의 종류 순위를 그대로 물려받는다. */
+  const nodeIds = Array.from(byNode.keys()).sort(function (a, b) { return a.localeCompare(b); });
+  for (const dv of nodeIds) {
+    const nodeMods = byNode.get(dv);
+    const box = document.createElement('li');
+    box.className = 'znode';
+    box.dataset.devid = dv;
+
+    const nh = document.createElement('div');
+    nh.className = 'znode__head';
+    const nid = document.createElement('span');
+    nid.className = 'znode__id';
+    nid.textContent = dv;                        /* 🔴 노드 ID 를 명시한다 (사용자 지시) */
+    nid.title = '노드 ' + dv;
+    const ncount = document.createElement('span');
+    ncount.className = 'znode__count';
+    ncount.textContent = '모듈 ' + nodeMods.length;
+    nh.appendChild(nid); nh.appendChild(ncount);
+    box.appendChild(nh);
+
+    const ul = document.createElement('ul');
+    ul.className = 'zone__mods';
+    ul.setAttribute('role', 'list');
+    for (const mod of nodeMods) {
+      /* 🔴 모듈 조회는 **`(devid, name)` 복합 키**로 한다. `name` 단독 조회 금지 —
+         같은 `name` 이 다른 노드에 또 있을 수 있고 그게 정상이다(§5.42).
+         🔑 서버 주석도 그것을 명시한다: *"이름만으로 찾으면 안 된다(복합 키)."*
+
+         ⚠ **부트스트랩 임시 규칙을 알고 있어야 한다**(socket 4a): 지금 서버는 **모듈 `name` 이
+         자리 `id` 와 같으면** 그 자리에 붙인다(펌웨어가 `D,A1,IP` 처럼 자리 이름을 쓰기 때문이다).
+         🔴 **그래서 모듈 이름을 바꾸면 결속이 끊긴다.** 설정이 생기면 설정이 대체한다.
+         → **화면은 `name` 을 표시에도 가공하지 않고 편집하지도 않는다**(라벨은 `kind` 에서 온다). */
+      const smod = zs && Array.isArray(zs.modules)
+        ? zs.modules.find(function (x) { return x && x.devid === mod.devid && x.name === mod.name; })
+        : null;
+      ul.appendChild(renderModuleRow(mod, smod, zs));
+    }
+    box.appendChild(ul);
+    nodes.appendChild(box);
+  }
+  li.appendChild(nodes);
+
+  const acts = document.createElement('div');
+  acts.className = 'zone__acts';
+  const map = (zs && zs.actions && typeof zs.actions === 'object') ? zs.actions : {};
+  for (const key of Object.keys(map)) {
+    /* 🔴 닫힌 집합에 없는 키는 **조용히 무시한다**(합의). 그리고 **키가 없는 조작은 아예 안 그린다** —
+       socket 확정: *"`actions` 에 없으면 지금 이 자리에 그 조작은 없다."* `ok:false` 와 다른 뜻이다.
+       ⚠ 없는 것을 막힌 버튼으로 그리면 사용자는 *"풀리면 눌리겠지"* 로 읽고 영영 안 풀린다. */
+    if (!ACTION_LABEL[key]) continue;
+    const a = map[key] || {};
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'zbtn';
+    b.dataset.zone = z.id;
+    b.dataset.act = key;
+    b.textContent = ACTION_LABEL[key];
+    /* ✅ **넷 다 보낼 수 있게 됐다**(socket 명세 §6.8): 요청 `type` 이 `actions` 키와 같은 이름이고
+       대상은 `slot` 하나다. ~~요청 형식이 없어 막던 분기~~ 는 사라졌다.
+       🔑 **키를 그대로 `type` 에 쓰므로 조작이 늘어도 이 코드가 안 바뀐다.** */
+    /* 🔴 **판정자를 하나로 둔다**(루트 2026-08-19 · 원장 §5.52).
+       전에는 버튼을 여는 근거가 **서버 `actions.ok`** 뿐이었고, 보내기를 막는 근거는
+       `requestReserve` 의 확인-후 재검증(**`canAct()`**)이었다. **판정자가 둘이면 그 차이만큼
+       "열려 보이는데 거부되는" 창이 반드시 생긴다** — 실측으로 아이들 1초 동안 그랬다(5/5).
+       🔑 그래서 격자는 `canAct()` 를 **읽기만 한다.** 두 번째 판정자를 만들지 않는다.
+       ⚠ 이유 문구도 그쪽(`actionBlockedReason()`)에서 가져온다 — 문구를 여기서 새로 쓰면
+          그게 곧 두 번째 판정자가 된다(같은 상태를 두 곳이 다르게 설명한다). */
+    const srvOk = a.ok === true;
+    const localOk = canAct();
+    const okAct = srvOk && localOk;
+    /* 🔑 `aria-disabled` 를 쓴다 — 진짜 `disabled` 면 키보드·스크린리더가 그 버튼에 닿지 못해
+       **왜 못 누르는지를 들을 수 없다**(원장 §3.2, 의도된 설계). */
+    b.setAttribute('aria-disabled', okAct ? 'false' : 'true');
+    /* 🔴 **서버의 이유가 먼저다.** 둘이 겹칠 때 아이들(1초 뒤 스스로 풀림)을 앞세우면
+       *"기다리면 되는 것"* 으로 읽혀서 **장치가 없다는 사실이 가려진다.** 스스로 안 풀리는 것을
+       먼저 말한다(§5.33 강조축: 조작을 막는 원인 중 **오래 남는 것**이 앞이다). */
+    if (!srvOk && a.reason) {
+      const fam = familyOf(a.reason);
+      /* 🔑 기호가 **없는 계열**(`normal`)도 있으므로 붙일 때만 공백을 넣는다 —
+         안 그러면 `"예약 "` 처럼 꼬리 공백이 남고, 접근 이름을 읽을 때도 그 공백이 들린다. */
+      const mk = FAMILY_MARK[fam] || '';
+      b.textContent = ACTION_LABEL[key] + (mk ? ' ' + mk : '');
+      b.title = REASON_TEXT[a.reason] || ('지금 할 수 없습니다 (' + a.reason + ')');
+      b.setAttribute('aria-label', ACTION_LABEL[key] + ' — 지금 할 수 없습니다: ' + b.title);
+    } else if (!localOk) {
+      /* 🔑 아이들은 **곧 풀린다** — `busy` 기호를 쓰고 남은 시간을 그대로 보인다.
+         150ms 티커가 `render()` 를 돌리므로 이 문구의 숫자가 **줄어드는 것이 보인다**
+         (`index.html` 아이들 티커의 설계 의도: 안 먹힌 줄 알고 더 세게 누르는 것을 막는다).
+         ⚠ 이 상태는 **미상 집계에 안 든다** — `a.reason` 을 건드리지 않으므로 배너는 그대로다.
+         (서버가 모른다는 것과 내 화면이 잠시 쉬는 것은 다른 사실이다.) */
+      b.textContent = ACTION_LABEL[key] + ' ' + (FAMILY_MARK.busy || '');
+      b.title = actionBlockedReason();
+      b.setAttribute('aria-label', ACTION_LABEL[key] + ' — 지금은 할 수 없습니다: ' + b.title);
+    }
+    acts.appendChild(b);
+  }
+  if (acts.childNodes.length) li.appendChild(acts);
+  return li;
+}
+
+/** 1행 요약. 🔴 `kind` 로 먼저 가른다 — **입구에 "예약됨"이 없다**(설계서 §4.1). */
+function zoneSummary(z, zs) {
+  if (!zs) return '상태 미상';
+  if (z.kind === 'parking') {
+    if (zs.occupied && zs.reserved) return '예약한 자리에 입차';
+    if (zs.occupied) return '사용 중';
+    if (zs.reserved) return '예약됨';
+    return '빈 자리';
+  }
+  /* entrance/exit — 예약 어휘를 쓰지 않는다. 차단봉 상태는 모듈 행이 말하고 여기서는
+     완료 판정만 요약한다. ⚠ 어휘가 확정되면 이 자리를 채운다(형태 미측정). */
+  /* 🔴 **닫힌 집합 넷**(socket §7.2.1 · REQ-0232 로 정본 확인). 계산 주체는 **서버**다 —
+     화면이 `value` 와 마지막 요청을 비교하지 않는다(비교하면 판정자가 둘이 된다).
+     ~~`partial`~~·~~`failed`~~ 는 **§3.5 의 설계 어휘이고 구현이 없다** — 서버가 안 보낸다.
+     내가 `partial` 가지를 두고 있었던 것이 그 오독이었다(원장 §5.66).
+
+     🔴 **그 밖의 값은 "정상"으로 떨어뜨리지 않는다.** 전에는 `mismatch`·`pending` 이 그냥
+     `"출구"` 로 그려졌다 — **사람이 봐야 하는 상태가 아무 표시 없는 평범한 이름으로 나왔다.**
+     🔑 같은 파일의 `familyOf()` 는 모르는 코드를 `fault` 로 떨어뜨린다. **기본값이 두 개였다.**
+
+     ⚠ 문구는 **층을 지킨다**(§5.34.2): `settled` 라도 *"열렸습니다"* 가 아니라
+     *"장치가 요청대로 보고합니다"* 다. 우리가 아는 것은 에코까지다. */
+  const c = zs.completion;
+  if (c === 'pending')  return '명령을 보냈습니다 — 장치 보고를 기다리는 중';
+  if (c === 'settled')  return '장치가 요청대로 보고합니다';
+  if (c === 'mismatch') return '⚠ 장치가 요청과 다르게 보고합니다';
+  /* `unknown` = **이 세션에 명령한 적이 없거나 비트를 못 읽었다** → 아무 주장도 하지 않는다.
+     자리 이름만 보이는 것이 맞다(없는 사실을 만들지 않는다). */
+  if (c === 'unknown' || c === undefined || c === null) return (z.kind === 'exit' ? '출구' : '입구');
+  /* 🔴 모르는 값 — 계약이 늘어난 것이다. **조용히 정상으로 그리지 않고 원문을 보인다.** */
+  return '⚠ 알 수 없는 상태 (' + String(c) + ')';
+}
+
+function renderModuleRow(mod, smod, zs) {
+  const li = document.createElement('li');
+  li.className = 'zmod';
+  const nameEl = document.createElement('span');
+  /* 🔑 `*` = **장치가 보고한 값**(명령의 결과를 되비춘 것). 층 규칙상 화면은 `"켜졌습니다"` 가
+     아니라 `"장치가 켰다고 보고합니다"` 까지만 말할 수 있다(§5.34.2) — 그 구분을 이 한 글자가 나른다.
+     ⚠ 접근 이름에는 기호가 아니라 **문장**으로 적는다(§7.2: 좁은 곳은 기호, 넓은 곳은 문장). */
+  const isAct = isOutputKind(mod.kind);
+  /* 🔴 **이름의 정본은 `mod.label` 이다** (socket 2026-08-20 · `lot.label("P1","LD","안내등")`).
+     기여자가 `lot.cpp` 에서 선언한 것이고 **화면은 그것을 그대로 쓴다.**
+
+     **폴백 순서 — 이 순서가 계약이다:**
+       ① `mod.label`                  기여자가 선언한 이름
+       ② `MOD_KIND_LABEL[mod.kind]`   종류 표(내 것). **지우지 않는다** — 라벨 없는 모듈이 빈칸이 되면 안 된다
+       ③ `mod.name`                   그것도 없으면 전선 이름 그대로
+
+     ⚠ `label` 은 **선언 안 하면 키가 아예 없다**(빈 문자열을 안 보낸다 · socket 확정).
+        그래서 `''` 를 "이름이 있는데 비었다"로 읽고 폴백을 건너뛸 일이 없다.
+     🔴 ~~`dupKind`~~ · ~~`(가상)`~~ 은 각각 REQ-0268 · 2026-08-20 에 제거됐다(위 `baseKind` 주석). */
+  const label = modLabelOf(mod);
+  /* 같은 `kind` 가 그 자리에 둘 이상이면 `name` 으로 가른다. `name` 은 **노드 안에서만 유효한
+     명칭**이라 그 자체로는 고유하지 않다(§5.42) — 그래서 기본 표시는 `kind` 라벨이다. */
+  /* 🔴 **`idx` 는 그냥 번호가 아니라 *전선 주소* 다** — 하행 `G,<rid>,<idx>,<op>` 가 이 값으로 모듈을 친다.
+     화면에 보이면 *"이 자리를 조작하면 어느 모듈이 움직이는가"* 가 사람 눈에 이어진다.
+     ⚠ **없으면 지어내지 않는다**: `idx` 가 없거나 음수면 `#?` 다. `-1` 은 서버가 **모른다**는 뜻이고
+     (`known:false` 와 같은 자리에서 나온다) **0 으로 보이게 하면 1번 모듈로 오독된다.**
+
+     🔑 **`name` 을 늘 같이 적는 근거**(§5.42 를 버리는 것이 아니라 좁히는 것이다):
+     §5.42 는 *"`name` 은 노드 안에서만 유효하므로 **단독으로** 쓰지 마라"* 다.
+     **이 행은 `devid` 가 머리에 박힌 노드 박스 *안* 에 그려진다** — 그 안에서 `name` 은 이미 고유하다.
+     ⚠ **박스 밖으로 이 문자열을 옮기면 그 조건이 깨진다.** 그때는 `devid` 를 같이 붙여야 한다. */
+  const idxText = (typeof mod.idx === 'number' && mod.idx >= 0) ? '#' + mod.idx : '#?';
+  nameEl.textContent = label + ' ' + idxText + ' (' + (mod.name || '?') + ')' + (isAct ? '*' : '');
+  /* 🔑 좁은 곳은 기호, 넓은 곳은 문장(§7.2). 화면에는 `#0` 이 붙고 **여기서는 그 뜻을 풀어 쓴다** —
+     `#` 하나만 보고 "몇 번째 줄"로 읽으면 안 된다. 이것은 **장치 안의 모듈 번호**다. */
+  const idxWord = (typeof mod.idx === 'number' && mod.idx >= 0)
+    ? ('모듈 번호 ' + mod.idx + '번')
+    : '모듈 번호를 모릅니다';
+  const who = label + ' · ' + idxWord + ' · 이름 ' + (mod.name || '(없음)');
+  nameEl.title = isAct
+    ? (who + ' — 장치가 보고한 값입니다 (실제 점등·개방은 확인할 수 없습니다)')
+    : (who + ' — 장치가 측정한 값입니다');
+  const valEl = document.createElement('span');
+
+  let mark = '·', loud = '0';
+  if (!smod || smod.known !== true) {
+    mark = FAMILY_MARK.unknown;                     // ⏱ 모른다
+    /* 🔑 **강조축은 화면이 계산하지 않는다** — 이 자리의 조작이 막혔는지에서 파생된다(§5.33). */
+    loud = zoneBlockedByUnknown(zs) ? '1' : '0';
+  } else {
+    mark = smod.value ? '●' : '○';
+  }
+  valEl.textContent = mark;
+  li.dataset.loud = loud;
+
+  /* 🔴 **동작 상태등 — 셋이다.** 사용자는 "녹색/적색"이라고 했고 루트가 셋째를 못 박았다:
+       🟢 값을 받고 있다   🔴 고장 계열로 막혀 있다   ⚪ **모른다**
+     **"모름"을 녹색이나 적색으로 칠하면** `0` 이 건강인지 못 셈인지를 못 가르는 그 형태가 된다(원장 1.1).
+
+     🔴🔴 **이 등은 `value` 와 다른 축이다 — 한 칸에 합치지 마라.**
+       `value`(●/○) = **측정값**: 차가 있다/없다 · 차단봉이 열렸다/닫혔다
+       이 등     = **그 모듈이 지금 값을 내고 있는가**
+     합치면 *"차가 없다"* 와 *"모듈이 죽었다"* 가 같은 색이 된다 — §5.33(기호는 원인, 강조는 영향 —
+     두 축을 섞지 마라)의 형태다. 그래서 **등과 값을 나란히 둘 다 그린다.**
+
+     ⚠ **적색의 근거는 화면이 만들지 않는다** — 서버가 준 `reason` 의 계열(`fault`)만 읽는다(§5.14).
+     계열을 모르면 적색이 아니라 **⚪ 모름**이다. *"모르는 것을 이상으로 그리는 것"* 도 지어내는 것이다. */
+  let lamp = 'unknown', lampWhy = '값을 받지 못하고 있습니다 (등록 전·오프라인·결속 끊김 — 원인은 화면이 알 수 없습니다)';
+  if (smod && smod.known === true) {
+    lamp = 'ok'; lampWhy = '값을 받고 있습니다';
+  } else if (zoneBlockedByFault(zs)) {
+    lamp = 'bad'; lampWhy = '이 자리가 고장 계열 사유로 막혀 있습니다';
+  }
+  const lampEl = document.createElement('span');
+  lampEl.className = 'zlamp';
+  lampEl.dataset.state = lamp;
+  /* 🔑 색만으로 뜻을 나르지 않는다 — 색각 이상과 스크린리더 양쪽에 대한 규칙이다.
+     보이는 자리에는 도형이, 접근 이름에는 **문장**이 간다(§7.2). */
+  lampEl.textContent = lamp === 'ok' ? '\u25CF' : lamp === 'bad' ? '\u25B2' : '\u25CB';
+  lampEl.setAttribute('role', 'img');
+  lampEl.setAttribute('aria-label', '동작 상태: ' + (lamp === 'ok' ? '정상' : lamp === 'bad' ? '이상' : '모름') + ' — ' + lampWhy);
+  lampEl.title = lampEl.getAttribute('aria-label');
+
+  const head = document.createElement('div');
+  head.className = 'zmod__head';
+  head.appendChild(lampEl); head.appendChild(nameEl); head.appendChild(valEl);
+  li.appendChild(head);
+
+  /* 🔴 조작 UI 는 **`control` 선언이 있을 때만** 붙는다(§3.1). 없으면 이 아래가 통째로 없다. */
+  const ctl = renderModuleControl(mod, smod);
+  if (ctl) li.appendChild(ctl);
+  return li;
+}
+
+/** 이 자리의 조작 중 하나라도 **고장 계열로** 막혔나. 🔴 화면이 규칙을 만들지 않는다 —
+    서버가 준 `reason` 의 계열만 읽는다(`zoneBlockedByUnknown` 의 짝). */
+/* ────────────────────────────────────────────────────────────────
+   모듈 조작 UI — 정본 `docs/net/SPEC-web-control.md` §3.1·§3.2·§4
+   🔴 **화면은 `kind` 를 해석하지 않는다.** 무엇을 그릴지는 서버가 `control` 로 선언한다.
+      그래서 kind 가 늘어도 이 코드가 안 바뀐다. **뜻은 기여자가 `lot.cpp` 에서 정한다.**
+   ──────────────────────────────────────────────────────────────── */
+
+/**
+ * 🔴 `confirmed` **하나만** 읽는다 (§3.2 · 루트 지시).
+ * ⚠ `value` 와 `requested` 를 화면이 비교하면 **판정자가 둘이 된다** — 서버와 화면이 다른 답을 내는 날이 온다.
+ * 🔑 *"두 키를 읽어야 안전한 계약은 언젠가 한 키만 읽힌다."*
+ *
+ * 🔴 `partial` 을 `settled` 처럼 그리지 않는 것이 이 함수의 존재 이유다.
+ * 지금 상행 에코는 **비트**라 숫자를 못 나른다 — *"1234567 로 설정됨"* 은 **거짓 완료**다(2단계에서 닫힌다).
+ */
+function moduleConfirmText(smod) {
+  if (!smod) return null;
+  const c = smod.confirmed;
+  if (c === undefined || c === null || c === 'unknown') return null;   /* 아무 주장도 하지 않는다 */
+  const req = ('requested' in smod) ? String(smod.requested) : null;   /* 없으면 키가 없다(§3.2) */
+  const echo = smod.known === true ? (smod.value ? '켜짐' : '꺼짐') : '모름';
+  if (c === 'pending')  return { cls: 'wait', text: (req !== null ? req + ' 보냄 — ' : '') + '장치 응답을 기다리는 중' };
+  if (c === 'settled')  return { cls: 'ok',   text: '장치가 요청대로 보고합니다' + (req !== null ? ' (' + req + ')' : '') };
+  /* 🔴 숫자 모듈. 에코 비트는 "0이 아니다"만 말한다 — **값이 맞는지는 확인되지 않았다.** */
+  if (c === 'partial')  return { cls: 'warn', text: (req !== null ? req + ' 보냄' : '보냄') + ' · 장치 에코 ' + echo + ' · ⚠ 값 확인 불가' };
+  if (c === 'mismatch') return { cls: 'bad',  text: '⚠ 장치가 요청과 다르게 보고합니다' + (req !== null ? ' (' + req + ' 보냄 · 에코 ' + echo + ')' : '') };
+  /* 모르는 값은 조용히 정상으로 떨어뜨리지 않는다(§5.66 의 그 규칙). */
+  return { cls: 'bad', text: '⚠ 알 수 없는 상태 (' + String(c) + ')' };
+}
+
+/**
+ * 🔴 명령 **결말** — 셋이 갈려 보여야 한다(§3.3). **뭉치면 고칠 곳을 못 가른다:**
+ *   ok        — 없음
+ *   rejected  — 값·등록을 고쳐라. **재시도는 뜻이 없다**
+ *   no_answer — 장치·링크다. **화면 로직을 고쳐도 안 낫는다**
+ */
+function moduleCmdText(rec) {
+  if (!rec) return null;
+  if (rec.phase === 'sending') return { cls: 'wait', text: '보내는 중…' };
+  if (rec.outcome === 'ok')        return { cls: 'ok',   text: '✅ ' + (rec.message || '명령이 적용되었습니다') };
+  /* 🔴 **전선 전 거절** — 명령이 아직 안 나갔다. 고칠 것은 **내 요청**이다(SPEC §5 · `error` 봉투).
+     ⚠ 아래 `rejected` 와 **뭉치면 안 된다**: 저쪽은 장치가 답한 것이고 이쪽은 장치가 모른다. */
+  if (rec.outcome === 'not_sent')  return { cls: 'bad',  text: '🚫 보내지 않았습니다 — ' + (ERROR_TEXT[rec.reason] || rec.message || '요청을 확인해 주세요') };
+  /* 🔴 **전선 뒤 거절** — 나갔고 장치가 답했다. 재시도는 뜻이 없다. */
+  if (rec.outcome === 'rejected')  return { cls: 'bad',  text: '🔴 장치가 거절 — ' + (REASON_TEXT[rec.reason] || rec.message || '값을 확인해 주세요') + '  (다시 눌러도 같습니다)' };
+  if (rec.outcome === 'no_answer') return { cls: 'bad',  text: '⏱ 장치가 응답하지 않았습니다 — 장치·연결 문제입니다 (값을 바꿔도 안 낫습니다)' };
+  return { cls: 'warn', text: '⚠ 알 수 없는 결말 (' + String(rec.outcome) + ')' };
+}
+
+/** 작은 상태 줄 하나. */
+function statusLine(o) {
+  const d = document.createElement('div');
+  d.className = 'zctl__msg';
+  d.dataset.kind = o.cls;
+  d.textContent = o.text;
+  return d;
+}
+
+/**
+ * 🔴 **`control` 선언이 있는 모듈에만** 조작 UI 를 그린다 (§3.1 · 존재/부재 규칙).
+ * 없으면 **아무것도 안 그린다** — "막힌 버튼"으로도 그리지 않는다. 없는 것과 막힌 것은 다르다.
+ */
+function renderModuleControl(mod, smod) {
+  const ctl = mod && mod.control;
+  if (!ctl || !ctl.widget) return null;
+
+  const box = document.createElement('div');
+  box.className = 'zctl';
+  box.dataset.widget = ctl.widget;
+  box.dataset.module = mod.name;
+
+  /* 지금 보낼 수 있나 — **서버가 준 `cmd.ok` 만 본다**(§3.2). 화면이 규칙을 만들지 않는다. */
+  const cmdOk = !(smod && smod.cmd && smod.cmd.ok === false);
+  const cmdWhy = (smod && smod.cmd && smod.cmd.reason) || null;
+  const lo = (typeof ctl.min === 'number') ? ctl.min : null;
+  const hi = (typeof ctl.max === 'number') ? ctl.max : null;
+
+  const send = function (v) { sendModuleCmd(mod.devid, mod.name, v); };
+  const mkBtn = function (label, v, extraCls) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'zctl__btn' + (extraCls ? ' ' + extraCls : '');
+    b.textContent = label;
+    b.dataset.value = String(v);
+    if (!cmdOk) {
+      /* 🔑 진짜 `disabled` 대신 `aria-disabled` — 키보드·스크린리더가 닿아서 **왜 못 누르는지**를 듣는다. */
+      b.setAttribute('aria-disabled', 'true');
+      b.title = REASON_TEXT[cmdWhy] || '지금 보낼 수 없습니다';
+    }
+    b.addEventListener('click', function () {
+      if (!cmdOk) { showMessage(REASON_TEXT[cmdWhy] || '지금 보낼 수 없습니다', 'err'); return; }
+      send(v);
+    });
+    return b;
+  };
+
+  const row = document.createElement('div');
+  row.className = 'zctl__row';
+  const lab = document.createElement('span');
+  lab.className = 'zctl__label';
+  /* 🔴 ~~`ctl.label`~~ **없어졌다**(socket 2026-08-20). 이름의 정본은 `mod.label` 하나다.
+     🔑 근거: 같은 모듈에 이름이 둘이면 **우선순위 규칙**이 생기고, 규칙이 생기면 사람이 틀린다.
+        그리고 `choice` 는 이미 **옵션 라벨**이 버튼 글자라 `control` 의 라벨은 중복이었다. */
+  lab.textContent = modLabelOf(mod);
+  row.appendChild(lab);
+
+  if (ctl.widget === 'toggle') {
+    row.appendChild(mkBtn('켬', 1));
+    row.appendChild(mkBtn('끔', 0));
+  } else if (ctl.widget === 'choice') {
+    /* 🔑 **`options` 가 곧 명령표다.** `label` 을 그리고 `value` 를 보낸다 — 화면은 뜻을 모른다. */
+    const opts = Array.isArray(ctl.options) ? ctl.options : [];
+    for (const o of opts) row.appendChild(mkBtn(String(o.label), o.value));
+  } else if (ctl.widget === 'number') {
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.className = 'zctl__num';
+    /* 🔴 **입력 칸에 고정된 이름을 준다** — 격자는 매 `state`(초당 한 장)마다 통째로 다시 만들어진다.
+       이름이 없으면 다시 그릴 때 **사용자가 치던 글자가 사라진다**(사용자 실측 2026-08-20). */
+    inp.dataset.modKey = modKey(mod.devid, mod.name);
+    inp.dataset.role = 'main';
+    /* 🔴 **범위가 오면 화면이 먼저 막는다**(§3.1). 서버도 막지만(`out_of_range`),
+       사용자가 헛왕복을 하지 않게 하는 것이 화면의 몫이다. */
+    if (lo !== null) inp.min = String(lo);
+    if (hi !== null) inp.max = String(hi);
+    inp.setAttribute('aria-label', modLabelOf(mod) + ' 값'
+      + (lo !== null && hi !== null ? ' (' + lo + '부터 ' + hi + '까지)' : ''));
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'zctl__btn';
+    go.textContent = '보내기';
+    go.addEventListener('click', function () {
+      if (!cmdOk) { showMessage(REASON_TEXT[cmdWhy] || '지금 보낼 수 없습니다', 'err'); return; }
+      const v = Number(inp.value);
+      if (inp.value === '' || !Number.isFinite(v)) { showMessage('숫자를 입력해 주세요', 'err'); return; }
+      if (lo !== null && v < lo) { showMessage('최소 ' + lo + ' 이상이어야 합니다 (보내지 않았습니다)', 'err'); return; }
+      if (hi !== null && hi < v) { showMessage('최대 ' + hi + ' 이하여야 합니다 (보내지 않았습니다)', 'err'); return; }
+      send(v);
+    });
+    row.appendChild(inp);
+    row.appendChild(go);
+    if (lo !== null && hi !== null) {
+      const hint = document.createElement('span');
+      hint.className = 'zctl__hint';
+      hint.textContent = lo + '~' + hi;
+      row.appendChild(hint);
+    }
+  } else {
+    /* 🔴 모르는 위젯은 **조용히 무시하지 않고 그 사실을 보인다.** 계약이 늘어난 것이다. */
+    const un = document.createElement('span');
+    un.className = 'zctl__hint';
+    un.textContent = '⚠ 이 화면이 모르는 조작 형식입니다 (' + String(ctl.widget) + ')';
+    row.appendChild(un);
+  }
+  box.appendChild(row);
+
+  /* ── 🔑 연습 칸 — **범위를 무시하고 보낸다** (루트 지시)
+     위의 `number` 는 범위를 막는다. 그런데 **거절이 실제로 도는지 배우려면 넘겨 봐야 한다.**
+     🔑 **막는 것과 거절이 도는 것은 둘 다 필요하다** — 하나만 두면 반쪽만 배운다.
+     ⚠ 그래서 이 칸은 **일부러 검사하지 않는다.** 접어 두어 실수로 쓰지 않게 한다. */
+  const prac = document.createElement('details');
+  prac.className = 'zctl__prac';
+  const sum = document.createElement('summary');
+  sum.textContent = '연습 — 범위를 무시하고 보내기';
+  prac.appendChild(sum);
+  const prow = document.createElement('div');
+  prow.className = 'zctl__row';
+  const pin = document.createElement('input');
+  pin.type = 'number';
+  pin.className = 'zctl__num';
+  /* ⚠ 연습 칸도 **똑같이 사용자 소유**다. 루트 지적대로 둘 다 지켜야 한다. */
+  pin.dataset.modKey = modKey(mod.devid, mod.name);
+  pin.dataset.role = 'prac';
+  pin.setAttribute('aria-label', modLabelOf(mod) + ' 연습 값 (범위 검사 없음)');
+  const pgo = document.createElement('button');
+  pgo.type = 'button';
+  pgo.className = 'zctl__btn zctl__btn--warn';
+  pgo.textContent = '그대로 보내기';
+  pgo.title = '범위를 확인하지 않고 보냅니다 — 서버가 어떻게 거절하는지 보기 위한 것입니다';
+  pgo.addEventListener('click', function () {
+    const v = Number(pin.value);
+    if (pin.value === '' || !Number.isFinite(v)) { showMessage('숫자를 입력해 주세요', 'err'); return; }
+    send(v);        /* 🔴 일부러 범위를 안 본다 */
+  });
+  prow.appendChild(pin); prow.appendChild(pgo);
+  prac.appendChild(prow);
+  box.appendChild(prac);
+
+  /* ── 상태 두 줄 — **서로 다른 것을 말한다. 뭉치지 않는다** */
+  const conf = moduleConfirmText(smod);          /* 지금 값이 어떤가 (§4) */
+  if (conf) box.appendChild(statusLine(conf));
+  const rec = state.modCmd.get(modKey(mod.devid, mod.name));
+  const res = moduleCmdText(rec);                /* 마지막 명령이 어떻게 끝났나 (§3.3) */
+  if (res) box.appendChild(statusLine(res));
+
+  return box;
+}
+
+function zoneBlockedByFault(zs) {
+  const map = zs && zs.actions;
+  if (!map) return false;
+  for (const k of Object.keys(map)) {
+    const a = map[k];
+    if (a && a.ok !== true && familyOf(a.reason) === 'fault') return true;
+  }
+  return false;
+}
+
+/** 이 자리의 조작 중 하나라도 **미상 계열로** 막혔나. 🔴 화면이 규칙을 만들지 않는다 —
+    서버가 준 `reason` 의 계열만 읽는다. */
+function zoneBlockedByUnknown(zs) {
+  const map = zs && zs.actions;
+  if (!map) return false;
+  for (const k of Object.keys(map)) {
+    const a = map[k];
+    if (a && a.ok !== true && familyOf(a.reason) === 'unknown') return true;
+  }
+  return false;
+}
+
+function handleServerMessage(msg) {
+  if (!msg || typeof msg !== 'object') return;
+
+  /* 개정 봉투 둘. ⚠ **옛 `snapshot` 경로를 지우지 않는다** — 서버가 아직 `map`/`state` 를 안 보내는
+     동안에도 화면이 돌아야 한다. `map` 을 한 번도 못 받았으면 격자는 옛 `slots[]` 로 그린다.
+     🔑 그래서 **서버 배포가 화면을 안 깨뜨리고, 화면 배포도 서버를 안 기다린다.** */
+  if (msg.type === 'map')   { applyMap(msg);       return; }
+  if (msg.type === 'state') { applyZoneState(msg); return; }
+  /* 🔴 모듈 직접 조작(SPEC-web-control §3.3·§3.4). **`ack` 와 다른 타입이라 따로 받는다** —
+     `ack` 에 얹었으면 옛 함정(전선에 안 나간 것을 성공으로 선언)을 반복했다. */
+  if (msg.type === 'cmd_result')   { applyCmdResult(msg);   return; }
+  if (msg.type === 'batch_result') { applyBatchResult(msg); return; }
+
+  if (msg.type === 'snapshot') {
+    applySnapshot(msg, state.link === 'demo' ? 'demo' : 'ws');
+    return;
+  }
+
+  /**
+   * §5.3 확장 — `queued` = **"받았고, 아직 안 보냈다"** (REQ-0155 · 하행 슬롯 큐)
+   *
+   * 하행은 전송 슬롯(1.2초) 안에서 서버 차례에만 나가므로, 예약이 **전선에 바로 안 나갈 수
+   * 있다.** 예전 계약은 `ack`/`error` 둘뿐이라 그 구간을 말할 수단이 없었고, 화면의 침묵이
+   * "안 먹혔나?" → 재클릭 → 큐에 한 건 더 로 이어졌다.
+   *
+   * 🔴 **여기서 타이머를 다시 거는 것이 이 핸들러의 본체다.** 안 하면 큐에서 정상 대기 중인
+   * 요청을 `ACK_TIMEOUT`(6초)에 걸어 되돌리고, 사용자가 다시 눌러 큐가 더 쌓인다
+   * (REQ-0155 §5-(2) 증폭 고리). **화면이 "안전하게" 되돌리는 동작이 부하를 키우는 자리다.**
+   *
+   * `expires_ms` 는 **이 프레임을 받은 시점 기준 남은 상한**(지속시간)이다 — 절대 시각이
+   * 아니다. 서버가 `deadline − now` 로 만들어 보내므로 반복 수신 시 단조 비증가다.
+   */
+  if (msg.type === 'queued') {
+    /* 🔴 **두 맵을 다 본다** (REQ-0202). ~~예전에는 `state.pending`(예약)만 봤다~~ —
+       그래서 **테스트·시뮬 명령(`state.cmdPending`)의 `queued` 를 조용히 버렸다.**
+       그 경로는 6초 고정 타이머로 돌고 있었고, 서버 계약은 **큐 대기만 최대 4800ms** 라
+       **구조적으로 못 견딘다** → `"응답이 없습니다 (자체 타임아웃)"` 라는 **거짓 실패**가 났다.
+       🔴 **사용자가 실물로 재현했다**: 20개 이상 연타 → 그 문구 → *"이게 리셋 아닌가"* 로 읽혔고
+       **없는 장치 리셋을 쫓았다**(시리얼에 리셋 표지 0건). **거짓 실패가 오진을 만든 것이다.**
+       그리고 그 문구가 **재클릭을 부른다** — REQ-0166 에서 예약 경로에 닫은 증폭 고리가
+       이 경로엔 열려 있었다. */
+    const cmdp = state.cmdPending.get(msg.rid);
+    if (cmdp) {
+      /* 명령 경로는 **되돌릴 화면 상태가 없다**(§12A.4: 화면 상태를 안 바꾼다).
+         그래서 예약 경로처럼 상태 전이를 걸지 않고 **타이머만 다시 걸고 보이게 한다.** */
+      if (cmdp.timer) window.clearTimeout(cmdp.timer);
+      const cexp = Number(msg.expires_ms), cbud = Number(msg.ack_budget_ms);
+      if (Number.isFinite(cexp) && cexp >= 0 && Number.isFinite(cbud) && cbud >= 0) {
+        cmdp.timer = window.setTimeout(function () { clearCmdPending(msg.rid, true); }, cexp + cbud);
+      } else {
+        /* 🔑 **`ACK_TIMEOUT` 으로 메우지 않는다** — 예약 경로와 같은 이유다.
+           그 값을 계산해 보내는 서버는 항상 싣고, 안 싣는 서버는 큐가 없어 `queued` 를 안 보낸다.
+           즉 없으면 **모르는 판본**이고, 짐작한 상수를 쓰는 것이 방금 고친 그 실수다. */
+        cmdp.timer = 0;
+      }
+      /* 🔴 **보이게 한다.** 안 보이면 *"그냥 빨라졌나"* 와 구분이 안 되고, 큐가 흡수하는 것을
+         화면이 읽는다는 이 계약의 목적이 확인되지 않는다(REQ-0202 완료 조건 2). */
+      const clabel = CMD_LABEL[cmdp.kind] || '요청';
+      const cahead = (typeof msg.ahead === 'number' && msg.ahead >= 0) ? msg.ahead : null;
+      const ctext = '서버가 받았습니다 — '
+        + (cahead === null ? '전송 차례 대기 중' : cahead === 0 ? '다음 차례입니다' : '앞에 ' + cahead + '건');
+      if (cmdp.kind === 'sim_step') state.simOutcome = { level: 'none', text: ctext };
+      showMessage(clabel + ' — ' + ctext, 'info');
+      render();
+      return;
+    }
+
+    const p = state.pending.get(msg.rid);
+    if (!p) return;                 // 내 것이 아니거나 이미 끝난 요청 — 조용히 버린다
+    p.status = 'queued';
+    p.ahead = (typeof msg.ahead === 'number' && msg.ahead >= 0) ? msg.ahead : null;
+
+    if (p.timer) window.clearTimeout(p.timer);
+    const exp = Number(msg.expires_ms);
+    /* 🔴 `ack_budget_ms` = **큐 이탈 후** 결말까지의 상한(REQ-0166 으로 계약에 추가됐다).
+       ~~예전에는 이 자리에 `ACK_TIMEOUT`(6000)을 썼다~~ — **그게 구멍이었다.**
+       `expires_ms` 는 큐 대기까지만 덮으므로 이탈 후를 덮는 값이 화면에만 남았는데,
+       서버 최악이 **9900ms** 라 6000 은 **3900ms 모자랐다.** 그러면 화면이 서버보다 먼저
+       롤백하고 사용자가 다시 눌러 새 rid 로 큐에 한 건 더 — 닫으려던 고리가 그 틈에서 열린다.
+       → **화면이 기다리는 전부 = `expires_ms + ack_budget_ms`. 둘 다 서버가 준다.**
+       (서버는 이 값을 리터럴이 아니라 자기 상수에서 계산하므로 상수가 바뀌면 따라온다.) */
+    const budget = Number(msg.ack_budget_ms);
+    const okExp = Number.isFinite(exp) && exp >= 0;
+    const okBudget = Number.isFinite(budget) && budget >= 0;
+    if (okExp && okBudget) {
+      p.expiresAt = Date.now() + exp;
+      p.deadlineAt = Date.now() + exp + budget;
+      p.timer = window.setTimeout(function () { onQueueExpired(msg.rid); }, exp + budget);
+    } else {
+      /* ⚠ 두 값 중 하나라도 없으면 **전체 상한을 모른다.** 숫자를 지어내지 않는다.
+         짐작한 상한으로 되돌리면 지금 고치는 결함(거짓 롤백)이 다른 모양으로 돌아온다.
+         타이머를 걸지 않고 **"언제까지인지 모른다"를 화면에 그대로 적는다**(tileView).
+         계약상 `queued` 뒤에는 반드시 `ack`/`error` 가 오므로 이 상태는 그때 끝난다 —
+         그 보장이 깨지면 타일이 계속 대기로 남고, **그건 조용한 거짓말보다 낫다.**
+
+         🔑 **`ack_budget_ms` 가 없을 때 `ACK_TIMEOUT` 으로 메우지 않는 이유**: 그 값을 계산해
+         보내는 서버라면 항상 싣고, **안 싣는 서버는 큐도 없어서 `queued` 를 아예 안 보낸다.**
+         즉 `queued` 가 왔는데 이 값이 없으면 **내가 모르는 판본**이라는 뜻이다 — 그 자리에서
+         짐작한 상수를 쓰는 것이 정확히 REQ-0166 으로 막은 그 실수다. */
+      p.expiresAt = okExp ? (Date.now() + exp) : null;   // 이탈 예상은 알면 남긴다(표시용)
+      p.deadlineAt = null;
+      p.timer = 0;
+    }
+    render();
+    return;
+  }
+
+  if (msg.type === 'ack') {
+    // 테스트 모드 ACK — "명령이 처리됐다"일 뿐이다. 여기서 무장/주입 상태를 바꾸지 않는다(§12A.4).
+    const tp = state.cmdPending.get(msg.rid);
+    if (tp) {
+      const r = Number(msg.result);
+
+      // §12B — 시뮬 트리거는 테스트 모드와 다른 표를 쓴다. 문구를 빌려 쓰면 두 기능이 화면에서 섞인다.
+      if (tp.kind === 'sim_step') {
+        clearCmdPending(tp.rid, false);
+        // result=0 의 slot 은 **바뀐 칸**이다(§12B.5). 그걸 그대로 말해 준다.
+        if (r === 0) {
+          const where = (typeof msg.slot === 'string' && msg.slot) ? msg.slot : null;
+          state.simOutcome = { level: 'ok', text: where ? (where + ' 이(가) 바뀌었습니다') : '한 걸음 진행했습니다' };
+          showMessage('시뮬레이션 — ' + (where ? (where + ' 이(가) 바뀌었습니다') : SIM_RESULT_TEXT[0]), 'ok');
+        } else if (r === 5) {
+          // 성공으로 표시하면 "눌렀는데 아무 일도 안 난 것"을 화면이 됐다고 말하는 셈이다.
+          state.simOutcome = { level: 'none', text: '바꿀 시뮬 자리가 없습니다 — 아무것도 바뀌지 않았습니다' };
+          showMessage('시뮬레이션 — ' + SIM_RESULT_TEXT[5]
+            + ' (전부 실물 센서이거나 시뮬 칸이 없습니다)', 'info');
+        } else {
+          const other = (typeof msg.message === 'string' && msg.message) ? msg.message : ('알 수 없는 응답입니다 (result=' + r + ')');
+          state.simOutcome = { level: 'err', text: other };
+          showMessage('시뮬레이션 — ' + other, 'err');
+        }
+        render();
+        return;
+      }
+
+      /* 🔴 **차단봉은 테스트 모드 표를 쓰면 안 된다** (실측 2026-08-19 · socket 통보).
+         `result=3` 이 `TEST_RESULT_TEXT[3]` 으로 가면 **`"잘못된 자리 또는 값입니다"`** 가 뜬다.
+         그런데 차단봉의 `3` 은 **장치가 수행할 수 없다**(재시도 무의미)이고, 서버는 그 뜻을
+         `message` 로 실어 보낸다(`"장치가 이 조작을 수행할 수 없습니다"`).
+         🔴 **내 표가 서버 문구를 덮어써서 장치 실패를 사용자 잘못으로 돌리고 있었다** —
+         §5.7 과 같은 형태다(원인을 엉뚱한 곳으로 돌려 읽는 사람이 다른 데를 본다).
+         🔑 **거절 사유의 원본을 가진 쪽은 서버다** → 서버 `message` 를 먼저 쓰고 내 표는 **없을 때만**
+         쓴다(§"파생 값은 원본을 가진 쪽이 계산한다"). 표를 둘 다 두면 판정자가 둘이 된다.
+         ⚠ 테스트 모드·시뮬은 그대로 둔다 — 그쪽 `result` 는 뜻이 다르고 그 표가 정본이다. */
+      /* 🔴 ~~`isGate` — 차단봉 명령의 응답 갈래~~ **죽은 갈래가 됐다**(2026-08-20 게이트 제거).
+         화면이 `open_gate`/`close_gate` 를 더는 보내지 않으므로 `tp.kind` 가 그 값일 수 없다.
+         **`false` 로 고정해 아래 구조를 그대로 둔다** — 지우면 테스트 모드 갈래까지 손대게 되고,
+         그건 이 변경의 범위가 아니다(§"하는 김에" 를 막는다).
+         ✅ **여기서 배운 것은 `control` 경로에 옮겨 놨다**: *"거절 사유의 원본을 가진 쪽은 서버다 —
+         서버 문구를 먼저 쓰고 내 표는 없을 때만 쓴다."* `moduleCmdText()` 가 그 순서를 지킨다. */
+      const isGate = false;
+      /* 🔑 **서버 문구는 조작 이름을 이미 담고 있다**(`"차단봉을 닫았습니다"`). 그 앞에 내 라벨을
+         또 붙이면 `"차단봉 닫기 — 차단봉을 닫았습니다"` 가 된다.
+         → **서버 문구를 쓸 때는 라벨을 뺀다.** 내 대비 문구를 쓸 때는 이름이 없으니 **붙인다.**
+         ⚠ 줄이는 쪽을 **내 라벨로 고른 이유**: socket 의 문구는 로그·다른 화면에서도 쓰인다.
+         **이 한 줄에서만 쓰이는 쪽을 줄이는 것이 싸다.** */
+      const gateFromServer = isGate && typeof msg.message === 'string' && !!msg.message;
+      const text = isGate
+        ? (gateFromServer
+            ? msg.message
+            : (GATE_RESULT_TEXT[r] || ('알 수 없는 응답입니다 (result=' + r + ')')))
+        : (Object.prototype.hasOwnProperty.call(TEST_RESULT_TEXT, r)
+            ? TEST_RESULT_TEXT[r]
+            : (typeof msg.message === 'string' ? msg.message : '알 수 없는 응답입니다'));
+      clearCmdPending(tp.rid, false);
+      showMessage((tp.slot ? tp.slot + ' · ' : '')
+        + (gateFromServer ? '' : (CMD_LABEL[tp.kind] || '테스트 요청') + ' — ') + text
+        + (r === 0 ? ' (실제 반영 여부는 다음 스냅샷으로 확인합니다)' : ''), r === 0 ? 'ok' : 'err');
+      return;
+    }
+
+    const p = state.pending.get(msg.rid);
+    const result = Number(msg.result);
+    const table = (p && p.action === 'cancel') ? CANCEL_RESULT_TEXT : RESULT_TEXT;
+    const text = Object.prototype.hasOwnProperty.call(table, result)
+      ? table[result]
+      : (typeof msg.message === 'string' ? msg.message : '알 수 없는 응답입니다');
+
+    if (!p) { showMessage((msg.slot || '') + ' ' + text, result === 0 ? 'ok' : 'err'); return; }
+
+    if (result === 0) {
+      if (p.timer) window.clearTimeout(p.timer);
+      p.timer = 0;
+      p.status = 'confirmed';
+      // 스냅샷이 곧 따라온다. 안 와도 "확정됨"이 화면에 눌러앉지 않게 안전장치를 건다.
+      p.settleTimer = window.setTimeout(function () { clearPending(p.rid); render(); }, SETTLE_MS);
+      showMessage(p.slot + ' · ' + text, 'ok');
+      render();
+    } else {
+      rollback(p.rid, text);
+    }
+    return;
+  }
+
+  if (msg.type === 'error') {
+    const code = typeof msg.code === 'string' ? msg.code : '';
+    const text = ERROR_TEXT[code] || (typeof msg.message === 'string' ? msg.message : '오류가 발생했습니다');
+    /* 🔴 모듈 직접 조작의 **전선 전 거절**(SPEC §5). `cmd_result` 가 아니라 이 봉투로 온다.
+       🔑 **그 모듈 자리에 붙여서 보여 준다** — 화면 위쪽 한 줄로만 띄우면 **어느 모듈이 거절됐는지**를
+       사용자가 못 고른다. 특히 연습 칸으로 일부러 범위를 넘겼을 때 그 자리에서 답이 보여야 배운다.
+       ⚠ 문구는 *"보내지 않았습니다"* 다 — **장치는 이 일을 모른다.** 장치를 의심하게 만들면 안 된다. */
+    if (msg.rid && state.modPending.has(msg.rid)) {
+      const mp = state.modPending.get(msg.rid);
+      state.modPending.delete(msg.rid);
+      state.modCmd.set(modKey(mp.devid, mp.module), {
+        phase: 'done', rid: msg.rid, outcome: 'not_sent', reason: code,
+        value: mp.value, message: text, at: Date.now()
+      });
+      showMessage(mp.module + ' — ' + text, 'err');
+      render();
+      return;
+    }
+    if (msg.rid && state.cmdPending.has(msg.rid)) {
+      const tp = state.cmdPending.get(msg.rid);
+      clearCmdPending(msg.rid, false);
+      // 아두이노 미연결은 예약과 같은 경로다(§12B.5) — 새 규칙을 만들지 않는다.
+      if (tp.kind === 'sim_step') state.simOutcome = { level: 'err', text: text };
+      showMessage((CMD_LABEL[tp.kind] || '요청') + ' — ' + text, 'err');
+    }
+    else if (msg.rid && state.pending.has(msg.rid)) rollback(msg.rid, text);
+    else showMessage(text, 'err');
+    return;
+  }
+  // 모르는 type 은 조용히 무시한다.
+}
+
+/* ────────────────────────────────────────────────────────────────
+   8. 전송 계층 — WebSocket(주) / data_log.json 폴링(예비) / 데모
+   ──────────────────────────────────────────────────────────────── */
+
+const transport = {
+  ws: null,
+  pollTimer: 0,
+  reconnectTimer: 0,
+  demo: null,
+  pollInFlight: false,   // 폴백 시도가 아직 안 끝났는가 (REQ-0069)
+  pollStartedAt: 0,      // 그 시도를 언제 시작했는가 — 플래그가 새도 폴링이 영영 멈추지 않게 한다
+
+  start(demoMode) {
+    if (demoMode) { this.demo = createDemoTransport(); state.link = 'demo'; this.demo.start(); render(); return; }
+
+    // file:// 에서는 location.hostname 이 비어 ws://:9900 이 SyntaxError 를 던진다.
+    if (window.location.protocol === 'file:') {
+      state.link = 'nows';           // 재연결을 하지 않는다 — "N초 후 재시도"라고 말하면 거짓말이다
+      state.attempt = 0;
+      showMessage('file:// 로 열려 있어 WebSocket 을 시도하지 않습니다. 서버(9900)로 접속해 주세요. 데모는 ?demo=1', 'info');
+      this.startPolling();
+      render();
+      return;
+    }
+    this.startPolling();     // 연결될 때까지는 예비 경로가 화면을 채운다
+    this.connect();
+  },
+
+  connect() {
+    const url = wsTargetUrl();     // ⚠ 상수 포트를 되살리지 마라 — WS_PORT_DEFAULT 주석 참조
+    let sock;
+    try {
+      sock = new WebSocket(url);
+    } catch (e) {
+      this.scheduleReconnect();
+      return;
+    }
+    this.ws = sock;
+
+    sock.onopen = () => {
+      state.link = 'ws';
+      state.attempt = 0;
+      state.pollNotice = '';   // 연결 상태가 바뀌면 폴백 상황의 의미도 달라진다 → 다시 판단한다
+      this.stopPolling();
+      showMessage('서버에 연결되었습니다', 'ok');
+      render();
+    };
+
+    sock.onmessage = (event) => {
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+      handleServerMessage(msg);
+    };
+
+    sock.onerror = () => { /* onclose 가 이어서 온다 */ };
+
+    sock.onclose = () => {
+      if (this.ws !== sock) return;
+      this.ws = null;
+      if (state.link === 'ws') showMessage('서버 연결이 끊겼습니다. 파일 폴백으로 전환합니다', 'err');
+      state.link = 'reconnecting';
+      this.startPolling();
+      this.scheduleReconnect();
+      render();
+    };
+  },
+
+  /** 지수 백오프 + 지터 */
+  scheduleReconnect() {
+    state.attempt += 1;
+    const base = Math.min(BACKOFF_MAX, BACKOFF_MIN * Math.pow(1.7, state.attempt - 1));
+    const delay = Math.round(base * (0.85 + Math.random() * 0.3));
+    state.reconnectAt = Date.now() + delay;
+    state.link = 'reconnecting';
+    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = window.setTimeout(() => { this.connect(); }, delay);
+    render();
+  },
+
+  startPolling() {
+    if (this.pollTimer) return;
+    this.pollOnce();
+    this.pollTimer = window.setInterval(() => { this.pollOnce(); }, POLL_MS);
+  },
+
+  stopPolling() {
+    if (!this.pollTimer) return;
+    window.clearInterval(this.pollTimer);
+    this.pollTimer = 0;
+  },
+
+  /**
+   * 폴백 한 번 읽기.
+   *
+   * ⚠ **상한이 없으면 이 함수는 침묵으로 실패한다**(REQ-0069). fetch 는 서버가 응답을 매달고 있으면
+   * 성공도 실패도 하지 않는다 — 02:19 에 서버가 블로킹 send 에서 행에 걸렸던 것이 정확히 그 형태다.
+   * 그러면 아래 `.then`/`.catch` 중 **어느 것도 실행되지 않고**, `reportPoll()` 이 호출되지 않아
+   * "예비 경로를 읽지 못했다"는 말 자체가 나오지 않는다. 끊긴 것도 아니고 읽은 것도 아닌 상태로
+   * 조용히 매달려 있게 된다 — docs/dead-detector-pattern.md 4번("끝나야만 세는 지표")의 모양이다.
+   * 그래서 AbortController 로 반드시 끊어서 **실패를 사건으로 만든다.**
+   */
+  pollOnce() {
+    /* 앞선 시도가 아직 매달려 있으면 새로 쌓지 않는다. 아픈 서버를 3초마다 두들기면
+       요청만 쌓이고 상황은 나빠진다.
+       ⚠ 불리언만 보면 플래그가 새는 순간 폴링이 **영영** 멈춘다(그 자체가 죽은 탐지기다).
+       그래서 시각도 같이 본다 — 상한+1초가 지나면 플래그와 무관하게 다시 시도한다. */
+    if (this.pollInFlight && (Date.now() - this.pollStartedAt) < POLL_TIMEOUT_MS + 1000) return;
+    this.pollInFlight = true;
+    this.pollStartedAt = Date.now();
+
+    let status = 0;
+    let classified = false;
+    let timedOut = false;
+    const done = (kind, detail) => { classified = true; this.reportPoll(kind, detail); };
+
+    // 아주 오래된 브라우저를 위한 방어. 없으면 상한 없이 도는 예전 동작으로 떨어질 뿐 깨지지는 않는다.
+    const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    const killer = ctl
+      ? window.setTimeout(function () { timedOut = true; ctl.abort(); }, POLL_TIMEOUT_MS)
+      : 0;
+    const opts = ctl ? { cache: 'no-store', signal: ctl.signal } : { cache: 'no-store' };
+
+    fetch(LOG_FILE + '?t=' + Date.now(), opts)
+      .then(function (res) {
+        status = res.status;
+        return res.ok ? res.text() : null;
+      })
+      .then((text) => {
+        // 본문을 직접 파싱한다. res.json() 을 쓰면 "파일 없음"과 "형식이 깨짐"이
+        // 같은 예외로 합쳐져 문구를 가를 수 없다.
+        if (text === null) { done(status === 404 ? 'missing' : 'http', 'HTTP ' + status); return; }
+
+        let log;
+        try { log = JSON.parse(text); }
+        catch (e) { done('parse', 'JSON 으로 읽히지 않습니다'); return; }
+        if (!Array.isArray(log)) { done('parse', '최상위가 배열이 아닙니다 (§9.1)'); return; }
+        if (log.length === 0)    { done('empty', ''); return; }   // 기록 0건은 정상 상태다
+
+        const raw = snapshotFromLog(log);
+        if (!raw) { done('parse', '기록 형태가 §9.1 과 다릅니다'); return; }
+
+        done('ok', '');
+        if (state.link === 'ws') return;      // 그 사이 WS 가 살아났으면 덮어쓰지 않는다
+        applySnapshot(raw, 'file');           // ← WS 와 같은 함수로 합류한다
+      })
+      .catch((err) => {
+        // 분류가 끝난 뒤 터진 예외는 폴백 실패가 아니다. 네트워크 실패로 둔갑시키지 않는다.
+        if (classified) { console.error(err); return; }
+        // 상한에 걸려 우리가 끊은 것과, 상대가 거절한 것은 **다른 사건**이다. 문구를 가른다 —
+        // "연결이 거부됨"과 "응답이 없음"은 사용자가 해야 할 일이 다르다.
+        if (timedOut) { done('timeout', (POLL_TIMEOUT_MS / 1000) + '초 안에 응답이 없습니다'); return; }
+        this.reportPoll('network', (err && err.message) ? err.message : '요청 실패');
+      })
+      .finally(() => {
+        // 성공·실패·중단 어느 쪽으로 끝나도 반드시 여기를 지난다. 여기서 안 풀면 폴링이 멈춘다.
+        if (killer) window.clearTimeout(killer);
+        this.pollInFlight = false;
+      });
+  },
+
+  /**
+   * 폴백 실패를 어떻게 알릴지 정한다.
+   *
+   * 핵심 판단: **지금 WS 가 살아 있는가.** 살아 있다면 폴백은 화면을 채우고 있지도 않으므로
+   * 파일이 아직 없는 것(404)은 갓 띄운 서버의 **정상 상태**다(서버는 상태가 바뀔 때만 쓴다, §9.4).
+   * 정상 상태를 빨간 오류로 보고하면 사용자가 오류 표시 자체를 안 믿게 되고,
+   * 그러면 §12A.6 의 테스트 모드 경고처럼 정말 봐야 할 것까지 흘려보낸다.
+   *
+   * 반대로 WS 도 죽고 폴백도 읽을 수 없으면 그건 **아무것도 모르는 상태**다. 크게 보여야 한다.
+   */
+  reportPoll(kind, detail) {
+    if (kind === 'ok') { state.pollNotice = ''; state.pollFailures = 0; return; }
+    state.pollFailures += 1;
+
+    // file:// 로 열린 경우는 부팅 때 이미 이유를 설명했다. 같은 말을 빨갛게 반복하지 않는다.
+    if (state.link === 'nows') return;
+
+    // 같은 말을 폴링마다(3초) 반복하지 않는다. 다만 **연결 상태가 달라지면 의미도 달라지므로**
+    // 열쇠에 연결 상태를 함께 넣는다. 재연결 실패가 반복돼도 열쇠가 그대로라 다시 뜨지 않는다.
+    const scope = state.link === 'ws' ? 'ws' : (state.link === 'connecting' ? 'connecting' : 'down');
+    const key = scope + ':' + kind;
+    if (state.pollNotice === key) return;
+    state.pollNotice = key;
+
+    // 첫 연결 시도가 아직 진행 중이면 폴백이 필요한 상황인지 **아직 모른다.**
+    // 여기서 빨간 것을 띄우면 곧 연결될 서버에서도 시작하자마자 고장처럼 보인다.
+    // 다음 폴링(3초 뒤)에는 link 가 ws 또는 reconnecting 으로 정해져 있다.
+    if (state.link === 'connecting') return;
+
+    if (state.link === 'ws') {
+      // 404·기록 0건은 정상 기동 구간의 모습이다 → 아무 말도 하지 않는다.
+      if (kind === 'missing' || kind === 'empty') return;
+      // 상한 초과는 WS 가 살아 있어도 흘려보내지 않는다. 같은 서버가 HTTP 를 매달고 있다는 뜻이고,
+      // 그건 지금 WS 가 조용한 이유일 수 있다(한쪽만 아픈 것이 아니라 프로세스가 아픈 것).
+      if (kind === 'timeout') {
+        showMessage('예비 경로(data_log.json)가 ' + detail
+          + ' — 지금은 WebSocket 으로 받고 있지만, 같은 서버가 응답을 매달고 있다는 뜻일 수 있습니다.', 'info');
+        return;
+      }
+      // 그 밖(형식 깨짐·5xx 등)은 알아 둘 값이 있지만 지금 화면에는 영향이 없다.
+      showMessage('예비 경로(data_log.json)에 문제가 있습니다: ' + detail
+        + ' — 지금은 WebSocket 으로 받고 있어 화면에는 영향이 없습니다.', 'info');
+      return;
+    }
+
+    if (kind === 'missing') {
+      showMessage('서버와 끊겼고 예비 파일(data_log.json)도 아직 없습니다 — 지금 표시할 상태가 없습니다.', 'err');
+    } else if (kind === 'empty') {
+      showMessage('서버와 끊겼고 예비 기록이 0건입니다 — 지금 표시할 상태가 없습니다.', 'err');
+    } else if (kind === 'timeout') {
+      // 매달린 서버는 "죽었다"와 다르다 — 포트는 열려 있고 연결도 되는데 답만 안 온다.
+      // 그 구분을 문구에 남긴다. 사용자가 서버 프로세스를 봐야 하는 상황이기 때문이다.
+      showMessage('서버와 끊겼고, 예비 경로(data_log.json)도 ' + detail
+        + ' — 연결은 되는데 응답이 없습니다(서버가 멈춰 있을 수 있습니다).', 'err');
+    } else if (kind === 'parse') {
+      showMessage('예비 파일(data_log.json)을 해석할 수 없습니다: ' + detail, 'err');
+    } else {
+      showMessage('예비 경로(data_log.json)를 읽지 못했습니다: ' + detail, 'err');
+    }
+  },
+
+  send(payload) {
+    /* 🔴 아이들 시작점은 **여기 하나**다. 하행 경로가 전부 이 함수를 지나므로, 여기서 찍으면
+       새 경로가 생겨도 저절로 걸린다.
+       ⚠ **실제로 나간 경우에만** 찍는다 — 전송 경로가 없어 실패한 것까지 아이들로 세면
+       연결이 끊긴 동안 누른 것 때문에 복구 직후 1초를 못 누르게 된다.
+
+       🔴 **2026-08-19 정정.** 여기 원래 주석은 *"하행 **세** 경로(reserve·cancel·sendCommand)가
+       전부 이 함수를 지난다"* 였다. 그 뒤 내가 **`get_map` 이라는 네 번째 경로**를 넣으면서
+       **그 전제를 깼다** — 읽기 질의가 하행 아이들 1초를 켜서, 예약을 눌러도 확인 뒤에
+       `canAct()===false` 로 거부됐다(실측 5/5, 원장 §5.51).
+       🔑 **주석에 적힌 전제는 코드가 지켜 주지 않는다.** 그래서 세는 것을 그만두고
+       **`payload.type` 에서 유도**한다 — 부르는 쪽이 잊을 수 있는 인자를 만들지 않는다.
+       ⚠ **기본값은 "켠다"** 다. 새 하행이 생겼을 때 **조용히 안 켜지는 것**이
+       "잘못 켜지는 것"보다 위험하다(연타가 그대로 전선에 나간다). 면제는 아래 한 줄로만 늘어난다. */
+    const stamp = () => {
+      if (QUERY_TYPES[payload && payload.type]) return;   // 읽기 질의는 전선을 물지 않는다
+      lastSentAt = Date.now(); startCooldownTicker(); render();
+    };
+    if (state.link === 'demo' && this.demo) { stamp(); this.demo.send(payload); return; }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      stamp();
+      this.ws.send(JSON.stringify(payload));
+      return;
+    }
+    // 전송 경로가 없으면 즉시 정리한다.
+    // 예약은 낙관적 표시를 되돌리고(rollback), 테스트 요청은 되돌릴 화면 상태가 없으므로
+    // "보내는 중" 표시만 걷는다. 여기서 testPending 을 안 걷으면 6초 뒤 자체 타임아웃이
+    // 같은 실패를 두 번 알린다.
+    if (payload && payload.rid) {
+      const failText = '서버에 연결되어 있지 않아 요청을 보내지 못했습니다';
+      if (state.cmdPending.has(payload.rid)) {
+        clearCmdPending(payload.rid, false);
+        showMessage(failText, 'err');
+      } else {
+        rollback(payload.rid, failText);
+      }
+    }
+  }
+};
+
+/* ────────────────────────────────────────────────────────────────
+   9. 데모 모드 (?demo=1) — 서버 없이 렌더링과 예약 흐름을 검증한다
+      실제 경로에는 아무 영향이 없다.
+   ──────────────────────────────────────────────────────────────── */
+
+function createDemoTransport() {
+  // §5.3 예제를 복사해서 데모 상태로 쓴다(원본은 건드리지 않는다).
+  let slots = DEMO_SNAPSHOT.slots.map(function (s) { return Object.assign({}, s); });
+  let seq = DEMO_SNAPSHOT.device.seq;
+  let online = true;
+  let nextFailure = null;      // 다음 예약에 강제로 넣을 result
+  let dropNextAck = false;
+
+  // 데모 장치가 들고 있는 테스트 모드 상태(§12A.4 의 tmask 를 흉내낸다).
+  // 이것이 스냅샷에 실려야만 화면이 무장으로 보인다 — ACK 만으로는 절대 안 보인다.
+  let armed = false;
+  let lieNextArm = false;      // ACK 는 성공인데 tmask 는 반영 안 된 상황을 재현
+  let noSimSlots = false;      // §12B.4 result=5 재현용
+  let simCursor = 3;           // 2순위 선택을 재현 가능하게
+  const baseOccupied = {};     // 주입 해제 시 돌아갈 원래 센서값
+  DEMO_SNAPSHOT.slots.forEach(function (s) { baseOccupied[s.id] = s.occupied; });
+
+  function push() {
+    seq += 1;
+    handleServerMessage({
+      type: 'snapshot',
+      ts: Date.now(),
+      device: { online: online, device_id: 'P1', uptime: 3600 + (seq - DEMO_SNAPSHOT.device.seq), seq: seq },
+      test_mode: {
+        armed: armed,
+        override_count: armed ? slots.filter(function (s) { return s.overridden === 1; }).length : 0
+      },
+      slots: slots.map(function (s) {
+        const copy = Object.assign({}, s);
+        copy.overridden = armed ? (s.overridden === 1 ? 1 : 0) : 0;
+        return copy;
+      })
+    });
+  }
+
+  function find(id) { return slots.find(function (s) { return s.id === id; }); }
+
+  /**
+   * 시뮬 한 걸음 (§12B.2) — 데모에서는 10칸 모두 시뮬 칸으로 본다.
+   * 1순위: 예약됐는데 비어 있는 칸을 채운다(0→1) → occupied=1,reserved=1 이 화면에 뜬다.
+   * 2순위: 시뮬 칸 중 하나를 골라 occupied 를 뒤집는다.
+   * **overridden 은 절대 건드리지 않는다**(§12B.3) — 시뮬 값은 주입값이 아니다.
+   */
+  function handleSimStep(payload) {
+    if (noSimSlots) {
+      handleServerMessage({ type: 'ack', rid: payload.rid, slot: null, result: 5, message: '' });
+      return;
+    }
+    let target = slots.find(function (s) { return s.reserved === 1 && s.occupied === 0; });
+    if (!target) {
+      const idx = simCursor % slots.length;   // 데모는 재현 가능해야 하므로 순환으로 고른다
+      simCursor += 1;
+      target = slots[idx];
+    }
+    target.occupied = target.occupied === 1 ? 0 : 1;
+    handleServerMessage({ type: 'ack', rid: payload.rid, slot: target.id, result: 0, message: '' });
+    push();
+  }
+
+  /** 테스트 명령 처리 — ACK 와 스냅샷을 분리해서 보낸다(§5.4 / §12A.4) */
+  function handleTest(payload) {
+    const s = payload.slot ? find(payload.slot) : null;
+    let result = 0;
+
+    if (payload.type === 'test_set' || payload.type === 'test_clear') {
+      if (!armed) result = 4;                                   // §12A.2 — 무장 안 됐으면 거절
+      else if (!s) result = 3;
+      else if (payload.type === 'test_set' && payload.occupied !== 0 && payload.occupied !== 1) result = 3;
+    }
+
+    handleServerMessage({
+      type: 'ack', rid: payload.rid,
+      slot: payload.slot || null, result: result, message: ''
+    });
+    if (result !== 0) return;
+
+    if (payload.type === 'test_arm') {
+      if (lieNextArm) {
+        // ACK 는 성공이라고 답했지만 장치는 무장하지 않았다.
+        // 화면이 ACK 를 믿는다면 여기서 "무장됨"으로 보일 것이다 — 보이면 안 된다.
+        lieNextArm = false;
+        showMessage('데모: 무장 ACK 는 성공으로 보냈지만 tmask 에는 반영하지 않았습니다. 화면이 무장으로 보이면 §12A.4 위반입니다.', 'info');
+        push();
+        return;
+      }
+      armed = true;
+    } else if (payload.type === 'test_disarm') {
+      // §12A.2 — 해제하면 모든 오버라이드가 한 번에 사라지고 원래 소스로 돌아간다.
+      armed = false;
+      slots.forEach(function (x) { x.overridden = 0; x.occupied = baseOccupied[x.id]; });
+    } else if (payload.type === 'test_set') {
+      s.overridden = 1; s.occupied = payload.occupied;
+    } else if (payload.type === 'test_clear') {
+      s.overridden = 0; s.occupied = baseOccupied[s.id];
+    }
+    push();
+  }
+
+  return {
+    start() {
+      window.setTimeout(function () {
+        handleServerMessage(JSON.parse(JSON.stringify(DEMO_SNAPSHOT)));
+        showMessage('§5.3 예제 스냅샷을 적용했습니다 (A5 는 occupied=1, reserved=1 인 정상 완료 상태)', 'info');
+      }, 200);
+    },
+
+    send(payload) {
+      if (payload.type === 'sim_step') {
+        window.setTimeout(function () { handleSimStep(payload); }, 400);
+        return;
+      }
+      if (payload.type && payload.type.indexOf('test_') === 0) {
+        window.setTimeout(function () { handleTest(payload); }, 400);
+        return;
+      }
+      window.setTimeout(function () {
+        const s = find(payload.slot);
+        if (dropNextAck) {
+          dropNextAck = false;
+          showMessage('데모: 이번 요청은 ACK 를 보내지 않습니다. 자체 타임아웃 롤백을 확인하세요', 'info');
+          return;                                  // 응답 없음 → 자체 타임아웃이 롤백한다
+        }
+        let result = 0;
+        if (nextFailure !== null) { result = nextFailure; nextFailure = null; }
+        else if (!s) result = 3;
+        else if (payload.type === 'reserve' && s.occupied === 1) result = 1;
+        else if (payload.type === 'reserve' && s.reserved === 1) result = 2;
+
+        handleServerMessage({ type: 'ack', rid: payload.rid, slot: payload.slot, result: result, message: '' });
+        if (result !== 0 || !s) return;
+
+        if (payload.type === 'reserve') {
+          s.reserved = 1; s.user_id = user.user_id; s.reserved_at = Date.now();
+          push();
+          // 예전에는 2.5초 뒤 자동으로 차가 들어오게 했는데, 개정 5(§12B.1)가 **자율 전진을 없앴다.**
+          // 이제 입차는 시뮬 버튼이 민다 — 예약된 빈 칸이 1순위이므로 한 번만 누르면 된다(§12B.2).
+        } else {
+          s.reserved = 0; s.user_id = null; s.reserved_at = null;
+          push();
+        }
+      }, 500);
+    },
+
+    tools: {
+      resetSnapshot() {
+        slots = DEMO_SNAPSHOT.slots.map(function (s) { return Object.assign({}, s); });
+        online = true;
+        armed = false;
+        state.link = 'demo';
+        applySnapshot(JSON.parse(JSON.stringify(DEMO_SNAPSHOT)), 'demo');
+        showMessage('§5.3 예제 스냅샷으로 되돌렸습니다', 'info');
+      },
+      fileFallback() {
+        // §9.1 형태 배열 → 같은 정규화 함수 → 같은 렌더 함수를 탄다.
+        // 실제 폴백은 WS 가 죽었을 때만 생기므로 연결 상태도 같이 낮춘다(안 그러면 데모에서만 눌린다).
+        state.link = 'reconnecting';
+        const raw = snapshotFromLog(JSON.parse(JSON.stringify(DEMO_FILE_LOG)));
+        applySnapshot(raw, 'file');
+        showMessage('§9.1 data_log.json 형태를 같은 렌더 경로로 통과시켰습니다 (소유자 정보 없음 · 예약 불가)', 'info');
+      },
+      fileFallbackArmed() {
+        // §9.1 개정 4(REQ-0122) — test_mode 가 실린 파일이 들어왔을 때.
+        // 폴백이라는 이유만으로 '모름'이 되면 안 된다. 무장 배너와 A3 빗금이 떠야 한다.
+        state.link = 'reconnecting';
+        const raw = snapshotFromLog(makeArmedFileLog());
+        applySnapshot(raw, 'file');
+        showMessage('§9.1 개정 4 무장 레코드를 폴백 경로로 통과시켰습니다 — 무장 배너 + A3 의 ⚑주입값 빗금이 보여야 합니다. 안 보이면 파일의 test_mode 를 버리고 있는 것입니다.', 'info');
+      },
+      fileFallbackOffline() {
+        // §9.1 개정 9(REQ-0070) — device{online:false,last_frame_ts} 가 실린 파일이 들어왔을 때.
+        // 위 fileFallback() 은 그 필드가 **없는** 옛 파일이다. 두 버튼을 번갈아 눌러
+        // '끊김 + 경과 시간' ↔ '알 수 없음' 이 제대로 갈리는지 본다.
+        state.link = 'reconnecting';
+        const raw = snapshotFromLog(makeOfflineFileLog());
+        applySnapshot(raw, 'file');
+        showMessage('§9.1 개정 9 오프라인 레코드를 폴백 경로로 통과시켰습니다 — 센서 끊김과 마지막 프레임 경과가 보여야 합니다(숫자는 매초 자랍니다).', 'info');
+      },
+      sensorDown() {
+        online = false;
+        state.link = 'demo';
+        push();
+        showMessage('device.online=false 로 밀어 넣었습니다', 'info');
+      },
+      failNext() { nextFailure = 2; showMessage('데모: 다음 예약은 result=2(이미 예약됨)로 응답합니다', 'info'); },
+      dropNext() { dropNextAck = true; showMessage('데모: 다음 예약은 무응답 처리합니다', 'info'); },
+      lieArm() {
+        lieNextArm = true;
+        showMessage('데모: 다음 무장 요청은 ACK 만 성공으로 답하고 장치는 무장하지 않습니다. 화면이 속는지 보세요.', 'info');
+      },
+      noSim() {
+        noSimSlots = !noSimSlots;
+        showMessage('데모: 시뮬 칸 ' + (noSimSlots ? '없음 — 다음 시뮬 요청은 result=5 로 답합니다' : '있음으로 되돌렸습니다'), 'info');
+      }
+    }
+  };
+}
+
+function buildDemoTools(tools) {
+  const buttons = [
+    ['§5.3 스냅샷 다시 적용', tools.resetSnapshot],
+    ['§9.1 파일 폴백 경로 (device 없는 옛 형식)', tools.fileFallback],
+    ['§9.1 개정 4 폴백 + 무장(test_mode.armed) → A3 빗금', tools.fileFallbackArmed],
+    ['§9.1 개정 9 폴백 + 센서 끊김(last_frame_ts)', tools.fileFallbackOffline],
+    ['센서 끊김(online=false)', tools.sensorDown],
+    ['다음 예약 → 실패(result=2)', tools.failNext],
+    ['다음 예약 → 무응답', tools.dropNext],
+    ['다음 무장 → ACK 만 성공(tmask 미반영)', tools.lieArm],
+    ['시뮬 칸 없음 토글 → result=5', tools.noSim]
+  ];
+  for (const pair of buttons) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = pair[0];
+    b.addEventListener('click', pair[1]);
+    el.demoTools.appendChild(b);
+  }
+  el.demoTools.hidden = false;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   10. 부팅
+   ──────────────────────────────────────────────────────────────── */
+
+(function boot() {
+  buildGrid();
+  el.userId.textContent = user.user_id;
+
+  const params = new URLSearchParams(window.location.search);
+  const demoMode = params.get('demo') === '1';
+
+  if (demoMode) {
+    el.demoBanner.hidden = false;
+    el.demoBanner.textContent = '데모 모드 — 서버 없이 명세(docs/net/parking-protocol.md §5.3 / §9.1)의 예제를 하드코딩해 렌더링합니다. 실제 데이터가 아닙니다.';
+  }
+
+  /* 🔴 **화면 자신의 판본을 화면에 적는다.** 값은 `<meta name="screen-build">` 에 배포 도구가
+     심어 둔 것이고 여기서는 **읽어서 보일 뿐**이다 — 화면이 따로 계산하지 않는다(판정자 하나).
+     ⚠ `__UNSTAMPED__` 는 **배포 도구를 안 거친 사본**이라는 뜻이다. 개발 중엔 정상이지만
+        **그 사실이 보여야** 한다 — `dev_server` 사본이 운영보다 낡아도 조용하면 안 된다(루트 지시).
+     🔑 서버 판본과 비교해 경고까지는 **하지 않는다.** 과하면 개발에 방해가 된다 —
+        화면은 *"내가 무엇인지"* 만 말하고 **판단은 사람에게 남긴다.** */
+  if (el.footBuild) {
+    const bm = document.querySelector('meta[name="screen-build"]');
+    const raw = bm ? (bm.getAttribute('content') || '') : '';
+    if (!raw) el.footBuild.textContent = '(표지 없음)';
+    else if (raw === '__UNSTAMPED__') el.footBuild.textContent = '개발본 (배포 도구를 안 거침)';
+    else {
+      const bsrc = (raw.match(/(?:^|\s)src=([^\s]+)/) || [])[1];
+      const bgit = (raw.match(/(?:^|\s)git=([^\s]+)/) || [])[1];
+      el.footBuild.textContent = (bsrc || raw) + (bgit ? ' · ' + bgit : '');
+    }
+    el.footBuild.title = raw || '(표지 없음)';
+  }
+
+  /* 어느 서버에 붙는지를 화면에 적는다 — 운영과 시험이 같이 도는 동안
+     이건 장식이 아니라 안전장치다. 접속과 표시가 같은 함수(wsTargetUrl)를 쓰므로 어긋날 수 없다. */
+  const wsInfo = resolveWsPort();
+  if (demoMode) {
+    el.footWs.textContent = '(데모 모드 — 접속하지 않음)';
+  } else if (window.location.protocol === 'file:') {
+    el.footWs.textContent = '(file:// — 접속하지 않음)';
+  } else {
+    el.footWs.textContent = wsTargetUrl();
+  }
+
+  if (!demoMode && window.location.protocol !== 'file:') {
+    if (wsInfo.bad !== null) {          // ⚠ 빈 문자열도 잘못된 값이다 — 참/거짓으로 검사하지 마라
+      showMessage('?ws= 값 "' + wsInfo.bad + '" 이(가) 포트가 아니어서 무시했습니다. '
+                + wsTargetUrl() + ' 로 접속합니다 — 의도한 서버가 맞는지 확인하세요.', 'err');
+    }
+    /* 페이지를 준 포트와 WS 포트가 다르면 **다른 인스턴스일 수 있다.**
+       이 화면은 폴백을 상대경로로 읽으므로, 그 경우 WS 와 파일이 서로 다른 서버를 가리킨다. */
+    if (wsInfo.from === 'query' && window.location.port && wsInfo.port !== window.location.port) {
+      showMessage('이 페이지는 :' + window.location.port + ' 에서 받았는데 WebSocket 은 :'
+                + wsInfo.port + ' 로 붙습니다. 서로 다른 서버라면 화면이 두 인스턴스의 상태를 '
+                + '섞어 보여 줍니다 — 예약은 :' + wsInfo.port + ' 쪽 장치로 내려갑니다.', 'err');
+    }
+  }
+
+  render();
+  transport.start(demoMode);
+  if (demoMode) buildDemoTools(transport.demo.tools);
+
+  /* 재연결 카운트다운과 "N초 전"을 흐르게 한다.
+     ⚠ 여기서 render() 를 부르면 안 된다 — renderTestMode() 가 매번 #test-banner 의 자식을
+     새로 만드는데 그 노드는 aria-live 라, 스크린리더가 1초마다 같은 경고를 다시 읽는다.
+     그래서 신선도만 미는 renderFreshness() 를 따로 둔다.
+
+     그리고 이 타이머가 신선도의 **유일한 동력**이다. 서버 이벤트에 매달면
+     서버가 조용해지는 순간 판단도 같이 멈춘다 — 그게 이 요청이 막으려는 사고다. */
+  window.setInterval(function () {
+    renderAge();
+    /* 장치 침묵도 여기서 민다. renderConnection() 에 얹으면 안 된다 —
+       그쪽은 state.link === 'reconnecting' 일 때만 매초 돌기 때문에, file:// 로 연
+       폴백(state.link === 'nows')에서는 숫자가 얼어붙는다. 그런데 데모 버튼은
+       link 를 'reconnecting' 으로 두므로 **데모에서만 잘 도는 것처럼 보인다.** */
+    renderFrameAge();
+    renderFreshness();
+    if (state.link === 'reconnecting') renderConnection();
+  }, 1000);
+})();
+</script>
+</body>
+</html>
