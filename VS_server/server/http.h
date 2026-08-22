@@ -197,8 +197,17 @@
     // 입구에서 가까운 순 같은 물리 배치 기준은 **지금 아무도 갖고 있지 않다** —
     // 배치도가 생기면 이 함수 하나만 바꾸면 된다.
     int pick_free_slot() const {
-        for (int i = 0; i < 10; i++)
-            if (!slots[i].occupied && !slots[i].reserved) return i;
+        // CODEX FIX: only configured parking areas with attached modules are
+        // assignable. The original fixed A1..B5 scan could reserve an inactive
+        // or invisible area that no Arduino sensor can acknowledge.
+        if (!lot_) return -1;
+        const std::vector<ParkingLot::Area>& areas = lot_->areas();
+        for (size_t k = 0; k < areas.size(); k++) {
+            const ParkingLot::Area& area = areas[k];
+            if (area.kind != "parking" || area.modules.empty()) continue;
+            const int i = slot_index(area.id);
+            if (i >= 0 && !slots[i].occupied && !slots[i].reserved) return i;
+        }
         return -1;
     }
 
@@ -301,4 +310,5 @@
         atomic_write_log("[]\n");     // 쓰기 경로는 원자적 교체 하나뿐이다
         logf("=", "data_log.json 이 없어 빈 배열로 만들었다");
     }
+
 

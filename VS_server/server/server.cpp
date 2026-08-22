@@ -32,6 +32,7 @@
 // 왜 크로스 플랫폼인가: 원본은 Winsock 전용이라 이 팀의 macOS 에서 빌드조차 되지 않았다.
 // 빌드도 못 하는 코드는 검증할 수 없고, 검증할 수 없으면 "구현했다"고 말할 수 없다.
 #define _CRT_SECURE_NO_WARNINGS
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -93,7 +94,7 @@
 #include "config.h"      // 손잡이 — 포트·타이밍·상한·유도값과 그 근거
 #include "server_device.h"   // 디바이스 계층 잎 유틸 — SHA-1·base64·ws_accept·체크섬
 #include "server_seam.h"
-#include "parking.h"     // 🔴 **공개 조립 API** — 사용 코드가 읽는 유일한 헤더
+#include "parking.h"    // CODEX FIX: adds server controller reset hook
 #include "ridpool.h"
 #include "ledger.h"     // 노드 대장 — 재기동을 건너 "누가 있었나"를 기억한다
 #include "spot.h"       // 자리의 동작 방식 — 기여자가 구현하는 콜백
@@ -168,16 +169,16 @@ struct Server {
     // ──────────────────────────────────────────────────────────────────
 #include "state.h"         // 무엇을 기억하는가 — 필드·계수기·중첩 타입 전부
 #include "metrics.h"       // 소크 관측 · 복구 계측 · 지표 문장
-#include "nodes.h"         // 다중 노드 — 등록·승격·결속·라우팅
+#include "nodes.h"         // CODEX FIX: publish initial/general-area sensor states
 #include "wire.h"          // 송신 helper · WebSocket 프레임 (§5.2)
 #include "wsjson.h"        // 봉투 만들기 — map / state / snapshot JSON
 #include "seam.h"          // 이음매: 디바이스 → 도메인
 #include "persist.h"       // data_log.json 읽기·쓰기 (§9)
 #include "downlink.h"      // 🔒 하행 — 발행·재전송·회수 (전선 계약. 잠금)
 #include "uplink.h"        // 🔒 상행 — 장치 프레임 파서 (전선 계약. 잠금)
-#include "wsapi.h"         // 브라우저 → 서버 — WS 명령 수신 (§5.4)
-#include "http.h"          // HTTP 요청 · WS 업그레이드 · 정적 파일
-#include "listen.h"        // 포트 열고 닫기 — openPorts / closeDown
+#include "wsapi.h"         // CODEX FIX: server-authoritative reservation decisions
+#include "http.h"          // CODEX FIX: only configured parking areas are assignable
+#include "listen.h"        // CODEX FIX: correct failure return and load persistence
 #include "serve.h"         // 한 박자 — serveOneTick (수신→판정→하행→방송)
     // 옛 진입점 — 셋을 순서대로 부른다. **이 순서가 곧 흐름이다.**
     int run() {
@@ -317,6 +318,8 @@ struct ParkingServer::Impl {
 ParkingServer::ParkingServer(const ParkingLot& lot) : p_(new Impl) {
     p_->lot = lot;
     p_->srv.lot_ = &p_->lot;
+    // 🔑 점유 콜백에 넘길 **공개 객체**. 엔진은 자기를 감싼 것을 모르므로 여기서 알려 준다.
+    p_->srv.owner_ = this;
 }
 bool ParkingServer::send(const std::string& devid, const std::string& moduleName, long value) {
     return p_->srv.send_to_module(devid, moduleName, value);
@@ -334,9 +337,17 @@ ParkingServer::BatchResult ParkingServer::Batch::send() {
 int ParkingServer::maxPerBatch() const { return p_->srv.max_per_batch(); }
 long long ParkingServer::nowMs() const { return now_ms(); }
 void ParkingServer::onCommandResult(CmdResultFn fn) { p_->srv.cmd_cb_ = fn; }
+void ParkingServer::onOccupancyChanged(OccupancyFn fn) { p_->srv.occ_cb_ = fn; }
+void ParkingServer::onSensorValue(SensorValueFn fn) { p_->srv.val_cb_ = fn; }
+// 🔑 표지 `▸` 는 **기여자 줄**이다 — 엔진 줄(`=` · `!` · `←ARD` …)과 grep 으로 갈린다
+void ParkingServer::log(const std::string& msg) const { logf("▸", msg); }
 bool ParkingServer::deviceReady(const std::string& devid) const {
     const Node* n = p_->srv.node_by_devid(devid);
     return n && n->reg_done;
+}
+bool ParkingServer::parkingSpotAvailable(const std::string& spotId) const {
+    const int i = p_->srv.slot_index(spotId);
+    return i >= 0 && !p_->srv.slots[i].occupied && !p_->srv.slots[i].reserved;
 }
 
 ParkingServer::~ParkingServer() { delete p_; }
@@ -352,6 +363,3 @@ void ParkingServer::closeDown()    { p_->srv.closeDown(); }
 //   ⚠ 빌드가 두 줄이 됐다: `c++ -c server.cpp && c++ -c lot.cpp && c++ *.o -o srv`
 //     (또는 `c++ -o srv server.cpp lot.cpp` 한 줄)
 #include "entry.h"      // 엔진 진입점 — `main()` 은 여기 있다(기여자는 안 연다)
-
-
-

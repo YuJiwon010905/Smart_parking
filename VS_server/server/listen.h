@@ -47,7 +47,9 @@
                       << " · 카메라 " << g_port_cam << "\n"
                       << "   확인 : lsof -nP -iTCP:" << g_port_web << " -sTCP:LISTEN\n"
                       << "   다른 포트로 : ./srv --port-web=<값> --port-ardu=<값> --port-cam=<값>\n\n";
-            return 1;
+            // CODEX FIX: openPorts() is bool. Returning 1 here made a bind/listen
+            // failure look like success and allowed BAD_SOCK values into select().
+            return false;
         }
 
         // 🔴 **dev 는 기계용 경계 줄(`=== INSTANCE … logfmt=`)을 안 찍는다.**
@@ -62,6 +64,10 @@
                   << "  ─────────────────────────────────────────\n";
         std::cout.flush();
         ensure_log_exists();
+        // CODEX FIX: these persistence loaders existed but were never called by
+        // the real startup path, so RID and node-ledger state did not survive restart.
+        rid_cursor_load();
+        ledger_load();
 
         // 소크 관측(REQ-0065) — 기동 시각과 "아직 링크 없음" 상태를 장부에 연다
         soak_start_ms = now_ms();
@@ -107,3 +113,4 @@
         // 누계를 이 줄에 싣는다 — **로그 뒤쪽이 잘려도 이 한 줄로 인스턴스 총계가 복원된다.**
         // 🔴 dev 는 기계용 종료 줄을 안 찍는다.
     }
+

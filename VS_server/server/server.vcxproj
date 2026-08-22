@@ -19,6 +19,19 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="EXAMPLES.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="lot.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="lot_codex_fixed.cpp" />
+    <ClCompile Include="server.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="server_codex_fixed.cpp" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="cli.h" />
     <ClInclude Include="cmdresult.h" />
     <ClInclude Include="config.h" />
@@ -26,13 +39,17 @@
     <ClInclude Include="downlink.h" />
     <ClInclude Include="entry.h" />
     <ClInclude Include="http.h" />
+    <ClInclude Include="http_codex_fixed.h" />
     <ClInclude Include="ledger.h" />
     <ClInclude Include="listen.h" />
+    <ClInclude Include="listen_codex_fixed.h" />
     <ClInclude Include="lot.h" />
     <ClInclude Include="metrics.h" />
     <ClInclude Include="node.h" />
     <ClInclude Include="nodes.h" />
+    <ClInclude Include="nodes_codex_fixed.h" />
     <ClInclude Include="parking.h" />
+    <ClInclude Include="parking_codex_fixed.h" />
     <ClInclude Include="persist.h" />
     <ClInclude Include="ridpool.h" />
     <ClInclude Include="runtime.h" />
@@ -46,17 +63,15 @@
     <ClInclude Include="uplink.h" />
     <ClInclude Include="wire.h" />
     <ClInclude Include="wsapi.h" />
+    <ClInclude Include="wsapi_codex_fixed.h" />
     <ClInclude Include="wsjson.h" />
     <ClInclude Include="zone.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="GUIDE-sample.md" />
+    <None Include="GUIDE-server-says.md" />
     <None Include="index.html" />
     <None Include="README.md" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="EXAMPLES.cpp" />
-    <ClCompile Include="lot.cpp" />
-    <ClCompile Include="server.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>

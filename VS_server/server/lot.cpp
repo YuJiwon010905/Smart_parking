@@ -27,84 +27,363 @@
 //
 // 🔑 **배우는 것은 다섯이다**: `spot` · `at` · `parking` · `label` · `module`
 void buildLot(ParkingLot& lot) {
-    lot.spot("A1")                       // 자리 하나
-        .at(0, 0)                        // 화면 격자 위치(행,열) — **안 쓰면 순서대로 놓인다**
-        .parking()                       // 🔴 **주차영역.** 안 적으면 일반영역이고 점유·예약이 없다
-        .label("1번 자리")                //    화면에 보일 이름 — 안 쓰면 자리 id 가 뜬다
-        .module("P1", "A1")              // 모듈을 붙인다 — **센서인지 명령인지 안 가른다**
-        .module("P1", "B1")              //   🔑 그건 **장치가 등록에서 말한다**(kind 첫 글자)
-        .module("P1", "LD")              //   표시등
-        .module("P1", "L2");             //   표시기
-
-    // 🔴 **모듈을 안 붙인 주차 자리** — 자리만 잡아 두는 것도 정상이다 (REQ-0292)
-    //   서버가 봉투에 `active:{ok:false, reason:"no_modules"}` 를 실어 주고
-    //   화면이 그것을 **비활성**으로 그린다.
-    //   🔑 점유는 여전히 `unknown` 이다 — 지우지 않았다. **왜 모르는지를 같이 말할 뿐이다.**
-    //     (센서가 고장난 게 아니라 애초에 아무것도 안 붙였다)
-    lot.spot("A2").at(0, 1).parking().label("2번 자리");
-    lot.spot("A3").at(0, 2).parking().label("3번 자리");
+    // CODEX FIX: use the exact module names registered by
+    // client_2.ino. Parking slot IDs A1..A3 are also the names used
+    // by the R/C reservation protocol, so reservation ACKs resolve correctly.
+    lot.spot("A1").at(0, 0).parking().label("1번 자리")
+        .module("P1", "A1").module("P1", "L1");
+    lot.spot("A2").at(0, 1).parking().label("2번 자리")
+        .module("P1", "A2").module("P1", "L2");
+    lot.spot("A3").at(0, 2).parking().label("3번 자리")
+        .module("P1", "A3").module("P1", "L3");
     lot.spot("A4").at(0, 3).parking().label("4번 자리");
     lot.spot("A5").at(0, 4).parking().label("5번 자리");
 
-    lot.spot("E1")                       // 일반영역 — `parking()` 을 안 적었다
-        .at(3, 4)
-        .label("입구");                   // 🔑 **모듈이 없다.** 자리만 잡는 것도 정상이다 —
-                                         //   일반영역은 점유를 보고할 의무가 없다
+    // Entrance/exit sensors and gates are visible as general areas. They are
+    // deliberately not marked parking: approach detection must not consume a
+    // parking space or participate in reservation selection.
+    lot.spot("E1").at(4, 0).label("입구")
+        .module("P1", "U1").module("P1", "ED");
+    lot.spot("X1").at(4, 4).label("출구")
+        .module("P1", "U2").module("P1", "XD");
 
-    // 🔑 모듈 이름은 **정확히 2글자** — 장치 표(`client.ino`)와 글자 그대로 같아야 붙는다
-    // 🔑 선언 안 한 모듈은 **꺼진 것**이다. 장치에 있어도 화면에 안 나온다
-    // ⚠ 같은 칸에 둘을 놓으면 **하나가 가려진다.** 서버가 기동 로그에 지목해 말한다
+    lot.label("P1", "A1", "1번 주차 감지");
+    lot.label("P1", "A2", "2번 주차 감지");
+    lot.label("P1", "A3", "3번 주차 감지");
+    lot.label("P1", "U1", "입구 차량 감지");
+    lot.label("P1", "U2", "출구 차량 감지");
+    lot.label("P1", "ED", "입구 차단기");
+    lot.label("P1", "XD", "출구 차단기");
+    lot.label("P1", "L1", "1번 안내등");
+    lot.label("P1", "L2", "2번 안내등");
+    lot.label("P1", "L3", "3번 안내등");
 
-    // 자리를 더 켜려면 — 주석을 지운다
-    // lot.spot("A2").at(0,1).parking().label("2번 자리").module("P1","A2");
-    // 다른 사람 아두이노 : devid 만 바꾼다(1~8자)
-    // lot.spot("A6").at(1,0).parking().module("KIM01","C1");
-    // 장치가 하나뿐이면 devid 를 빼도 된다 — "아무 장치나 그 이름을 가진 것"
-    // lot.spot("A3").at(1,1).parking().module("A3");
+    // CODEX FIX: ED/XD/L1~L3 are intentionally not exposed as direct web
+    // controls. The state machine below is the single actuator decision owner.
+}
+// CODEX FIX: parking_test.ino의 중앙 판단 상태를 서버로 이동했다.
+// Arduino는 A1~A3/U1/U2를 읽고 ED/XD/L1~L3 명령을 실행할 뿐이다.
+namespace {
+const long long GATE_OPEN_TIMEOUT_MS = 5000;
 
-    // ── 모듈 이름과 화면 조작 ───────────────────────────────────────────
-    lot.label("P1", "A1", "왼쪽 센서");    // 🔑 **조작 못 하는 모듈도 이름을 갖는다**
-    lot.label("P1", "LD", "안내등");
-    lot.label("P1", "L2", "표시기");
-    // ⚠ `B1` 은 일부러 이름을 안 줬다 — **화면의 폴백 경로가 실제로 밟히도록.**
-    //   전부 이름을 달면 그 갈래가 한 번도 안 돌고, 그건 시험이 아니다
+struct ParkingController {
+    bool slotKnown[3];
+    bool occupied[3];
+    bool entryBaseline[3];
+    bool entranceKnown, entranceDetected;
+    bool exitKnown, exitDetected;
 
-    lot.control("P1", "LD").toggle();                    // 0 / 1
-    lot.control("P1", "L2").number(0, 9999999);          // 🔴 화면의 숫자 입력 칸
-    // 🔴 범위는 **장치가 정한 것**이다 — 넘기면 서버가 `out_of_range` 로 막는다
-    // ⚠ 에코는 **비트 하나**라 `1234567` 을 보내도 *"0이 아니다"* 만 돌아온다 →
-    //   화면의 `confirmed` 는 **`partial`** 이 유일한 참이다. **값 확인은 안 된다**
+    bool entranceLatched;
+    bool exitLatched;
+    bool entryActive;
+    bool exitActive;
+    bool exitPassing;
+    bool abortEntry;
+    bool abortExit;
+    bool retryEntryClose;
+    bool retryExitClose;
+
+    int assignedSlot;
+    int wrongSlot;
+    long long entryOpenedAt;
+    long long exitOpenedAt;
+    long long entryRetryAt;
+    long long exitRetryAt;
+
+    ParkingController()
+        : entranceKnown(false), entranceDetected(false),
+          exitKnown(false), exitDetected(false),
+          entranceLatched(false), exitLatched(false),
+          entryActive(false), exitActive(false), exitPassing(false),
+          abortEntry(false), abortExit(false),
+          retryEntryClose(false), retryExitClose(false),
+          assignedSlot(-1), wrongSlot(-1),
+          entryOpenedAt(0), exitOpenedAt(0),
+          entryRetryAt(0), exitRetryAt(0) {
+        for (int i = 0; i < 3; i++) {
+            slotKnown[i] = false;
+            occupied[i] = false;
+            entryBaseline[i] = false;
+        }
+    }
+};
+
+ParkingController g_ctrl;
+
+int parkingIndex(const std::string& module) {
+    if (module == "A1") return 0;
+    if (module == "A2") return 1;
+    if (module == "A3") return 2;
+    return -1;
 }
 
-// ② 한 박자마다 불린다 — 명령을 여기서 낸다      🔑 **비워 둬도 돌아간다**
-//   조립 시점에는 장치가 아직 안 붙어 있다. 그래서 명령은 여기서 낸다.
-//   `srv.send(devid, 모듈이름, 값)` · 값의 뜻은 기여자가 정한다   자세히: §명령
-//   🔴 값의 뜻을 서버도 프로토콜도 모른다. **표를 양쪽에 똑같이 적어라**
+std::string parkingName(int i) {
+    return (i >= 0 && i < 3) ? std::string("A") + char('1' + i) : std::string("??");
+}
+
+bool allParkingKnown() {
+    return g_ctrl.slotKnown[0] && g_ctrl.slotKnown[1] && g_ctrl.slotKnown[2];
+}
+
+int firstFreeParkingSlot(ParkingServer& srv) {
+    if (!allParkingKnown()) return -2;       // 아직 안전하게 판단할 자료가 없다
+    for (int i = 0; i < 3; i++)
+        if (!g_ctrl.occupied[i] && srv.parkingSpotAvailable(parkingName(i))) return i;
+    return -1;                               // 만차
+}
+
+int occupiedCount() {
+    int n = 0;
+    for (int i = 0; i < 3; i++) if (g_ctrl.occupied[i]) n++;
+    return n;
+}
+
+bool queueEntryBatch(ParkingServer& srv, int selected, long gateCommand) {
+    ParkingServer::Batch b = srv.batch("P1");
+    b.add("L1", selected == 0 ? 1 : 0)
+     .add("L2", selected == 1 ? 1 : 0)
+     .add("L3", selected == 2 ? 1 : 0)
+     .add("ED", gateCommand);
+    ParkingServer::BatchResult r = b.send();
+    if (r.queued != 4 || r.rejected != 0) {
+        srv.log("[입차] LED/입구 차단기 묶음 발행 실패 — queued="
+                + std::to_string(r.queued) + " rejected=" + std::to_string(r.rejected));
+        return false;
+    }
+    return true;
+}
+
+bool queueExitGate(ParkingServer& srv, long command) {
+    if (srv.send("P1", "XD", command)) return true;
+    srv.log(std::string("[출차] 출구 차단기 ") + (command == 1 ? "OPEN" : "CLOSE")
+            + " 발행 실패");
+    return false;
+}
+
+void clearEntryState() {
+    g_ctrl.entryActive = false;
+    g_ctrl.assignedSlot = -1;
+    g_ctrl.wrongSlot = -1;
+    g_ctrl.entryOpenedAt = 0;
+    if (!g_ctrl.entranceDetected) g_ctrl.entranceLatched = false;
+}
+
+void clearExitState() {
+    g_ctrl.exitActive = false;
+    g_ctrl.exitPassing = false;
+    g_ctrl.exitOpenedAt = 0;
+    if (!g_ctrl.exitDetected) g_ctrl.exitLatched = false;
+}
+
+void beginEntry(ParkingServer& srv) {
+    const int selected = firstFreeParkingSlot(srv);
+    if (selected == -2) {
+        srv.log("[입차] 주차 센서 초기값이 모두 오지 않아 배정을 보류한다");
+        return;
+    }
+    if (selected < 0) {
+        srv.log("[입차] PARKING_FULL — 빈 주차면 없음");
+        return;
+    }
+    if (!srv.deviceReady("P1")) {
+        srv.log("[입차] Arduino 등록 미완료 — 게이트를 열지 않는다");
+        return;
+    }
+
+    // 세 안내등과 입구 게이트를 같은 하행 창에 묶는다.
+    if (!queueEntryBatch(srv, selected, 1)) return;
+    g_ctrl.assignedSlot = selected;
+    g_ctrl.wrongSlot = -1;
+    for (int i = 0; i < 3; i++) g_ctrl.entryBaseline[i] = g_ctrl.occupied[i];
+    g_ctrl.entryActive = true;
+    g_ctrl.entryOpenedAt = srv.nowMs();
+    srv.log("[입차] ENTRY_APPROACH → " + parkingName(selected)
+            + " 배정 · 안내등 ON · 입구 게이트 OPEN 요청");
+}
+
+void finishEntry(ParkingServer& srv, const std::string& reason) {
+    if (!queueEntryBatch(srv, -1, 2)) return;  // LED 모두 OFF + ED CLOSE
+    srv.log("[입차] " + reason + " · 안내등 OFF · 입구 게이트 CLOSE 요청");
+    clearEntryState();
+}
+
+void controllerTick(ParkingServer& srv) {
+    if (!g_ctrl.entranceDetected && !g_ctrl.entryActive) g_ctrl.entranceLatched = false;
+    if (!g_ctrl.exitDetected && !g_ctrl.exitActive) g_ctrl.exitLatched = false;
+
+    // CLOSE ACK 실패는 다음 tick에서 같은 안전 명령을 새 RID로 다시 발행한다.
+    if (g_ctrl.retryEntryClose && srv.deviceReady("P1")
+        && srv.nowMs() >= g_ctrl.entryRetryAt) {
+        g_ctrl.retryEntryClose = false;
+        g_ctrl.entryRetryAt = srv.nowMs() + 1200;
+        if (!queueEntryBatch(srv, -1, 2)) g_ctrl.retryEntryClose = true;
+    }
+    if (g_ctrl.retryExitClose && srv.deviceReady("P1")
+        && srv.nowMs() >= g_ctrl.exitRetryAt) {
+        g_ctrl.retryExitClose = false;
+        g_ctrl.exitRetryAt = srv.nowMs() + 1200;
+        if (!queueExitGate(srv, 2)) g_ctrl.retryExitClose = true;
+    }
+
+    if (g_ctrl.abortEntry) {
+        g_ctrl.abortEntry = false;
+        finishEntry(srv, "입구 OPEN 명령 실패로 세션 중단");
+    }
+    if (g_ctrl.abortExit) {
+        g_ctrl.abortExit = false;
+        if (queueExitGate(srv, 2)) {
+            srv.log("[출차] 출구 OPEN 명령 실패로 CLOSE 요청");
+            clearExitState();
+        }
+    }
+
+    // 새 입차 접근은 U1의 상승 상태를 한 번만 소비한다.
+    if (g_ctrl.entranceKnown && g_ctrl.entranceDetected
+        && !g_ctrl.entranceLatched && !g_ctrl.entryActive) {
+        g_ctrl.entranceLatched = true;
+        beginEntry(srv);
+    }
+
+    if (g_ctrl.entryActive && g_ctrl.assignedSlot >= 0) {
+        // 배정된 자리에 차량이 들어오면 정상 주차 완료다.
+        if (g_ctrl.occupied[g_ctrl.assignedSlot]) {
+            finishEntry(srv, "PARKING_COMPLETE " + parkingName(g_ctrl.assignedSlot));
+        } else {
+            // 배정 당시 이미 차 있던 자리가 비워지면 그 이후의 재점유는
+            // 이번 입차 차량의 오주차 후보가 될 수 있다.
+            for (int i = 0; i < 3; i++)
+                if (i != g_ctrl.assignedSlot && g_ctrl.entryBaseline[i]
+                    && !g_ctrl.occupied[i]) g_ctrl.entryBaseline[i] = false;
+
+            // 다른 빈 자리가 먼저 0→1이면 오주차로 한 번만 기록한다.
+            if (g_ctrl.wrongSlot >= 0 && !g_ctrl.occupied[g_ctrl.wrongSlot]) {
+                srv.log("[입차] WRONG_PARKING_CLEARED " + parkingName(g_ctrl.wrongSlot)
+                        + " · 원래 배정 " + parkingName(g_ctrl.assignedSlot));
+                g_ctrl.entryBaseline[g_ctrl.wrongSlot] = false;
+                g_ctrl.wrongSlot = -1;
+            }
+            if (g_ctrl.wrongSlot < 0) {
+                for (int i = 0; i < 3; i++) {
+                    // 배정 전에 이미 차 있던 자리는 오주차 사건이 아니다.
+                    if (i != g_ctrl.assignedSlot && !g_ctrl.entryBaseline[i]
+                        && g_ctrl.occupied[i]) {
+                        g_ctrl.wrongSlot = i;
+                        srv.log("[입차] WRONG_PARKING " + parkingName(i)
+                                + " · EXPECTED " + parkingName(g_ctrl.assignedSlot));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 주차가 끝나지 않은 채 오래 열렸으면 서버가 닫는다. U1이 아직
+        // 감지 중이면 차량 위로 닫지 않고 다음 timeout 구간까지 보류한다.
+        if (g_ctrl.entryActive
+            && srv.nowMs() - g_ctrl.entryOpenedAt >= GATE_OPEN_TIMEOUT_MS) {
+            if (g_ctrl.entranceDetected) {
+                srv.log("[입차] OPEN timeout이지만 U1 감지 중 — 안전을 위해 CLOSE 보류");
+                g_ctrl.entryOpenedAt = srv.nowMs();
+            } else {
+                finishEntry(srv, "ENTRY_TIMEOUT");
+            }
+        }
+    }
+
+    // 출구는 U2 상승 시 서버가 허가하고, 감지 후 하강하면 통과 완료다.
+    if (g_ctrl.exitKnown && g_ctrl.exitDetected
+        && !g_ctrl.exitLatched && !g_ctrl.exitActive) {
+        g_ctrl.exitLatched = true;
+        if (srv.deviceReady("P1") && queueExitGate(srv, 1)) {
+            g_ctrl.exitActive = true;
+            g_ctrl.exitPassing = true;
+            g_ctrl.exitOpenedAt = srv.nowMs();
+            srv.log("[출차] EXIT_APPROACH → 출구 게이트 OPEN 요청");
+        }
+    }
+
+    if (g_ctrl.exitActive && g_ctrl.exitPassing && !g_ctrl.exitDetected) {
+        if (queueExitGate(srv, 2)) {
+            srv.log("[출차] EXIT_COMPLETE → 출구 게이트 CLOSE 요청");
+            clearExitState();
+        }
+    } else if (g_ctrl.exitActive
+               && srv.nowMs() - g_ctrl.exitOpenedAt >= GATE_OPEN_TIMEOUT_MS) {
+        // parking_test.ino는 10초 뒤 무조건 닫았지만, 감지 중인 차량 위로
+        // 닫히는 위험을 피하기 위해 서버 수정본은 U2 해제까지 기다린다.
+        if (g_ctrl.exitDetected) {
+            srv.log("[출차] OPEN timeout이지만 U2 감지 중 — 안전을 위해 CLOSE 보류");
+            g_ctrl.exitOpenedAt = srv.nowMs();
+        } else if (queueExitGate(srv, 2)) {
+            srv.log("[출차] EXIT_TIMEOUT → 출구 게이트 CLOSE 요청");
+            clearExitState();
+        }
+    }
+}
+} // namespace
+
+// 서버의 주기 tick: timeout과 재시도 판단도 Arduino가 아니라 여기서 수행한다.
 void onTick(ParkingServer& srv) {
-    (void)srv;
-    // if (srv.deviceReady("P1") && <내 조건>) {
-    //     srv.send("P1", "LD", 1);                     // 단건
-    //
-    //     ParkingServer::Batch b = srv.batch("P1");     // 묶음 — 한 창에 같이 나간다
-    //     b.add("LD",1).add("L2",7654321);
-    //     ParkingServer::BatchResult r = b.send();      // 최대 srv.maxPerBatch() 건
-    // }
-    //   🔑 주기 동작이 필요하면 `srv.nowMs()` — **단조 시계(ms)**. 벽시계가 아니다
-    //   if (srv.nowMs() - last >= 10000) { last = srv.nowMs(); … }
-    //   🔴 상한(지금 4)을 넘기면 **한 건도 안 보내고 거절한다**   자세히: §묶음
-    //   ⚠ 창 원자성은 보장한다. **실행 원자성은 아니다** — 하나가 거절돼도 나머지는 수행된다
-    //   ⚠ 주석 안의 코드는 컴파일러가 안 본다 — **켜면 한 번 빌드해 봐라**
+    controllerTick(srv);
 }
 
-// ③ 명령 결과가 도착하면 불린다 — 성공 / 거절 / 무응답   🔑 **비워 둬도 돌아간다**
-//   🔴 셋은 **고치는 곳이 다르다.** 무응답은 장치·링크 문제다   자세히: §콜백
 void onCmdResult(const CmdResult& r) {
-    // 🔑 **이 줄은 켜 둔다.** 다른 예시들과 규칙이 다른 이유:
-    //   주석 처리하는 것은 **샘플이 스스로 명령을 쏘는 것**(`onTick`)이다.
-    //   이건 **출력**이라 아무것도 안 쏜다 — 켜 둬도 기여자의 장치가 안 움직인다.
-    //
-    // 🔑 `LD` 는 보드의 **13번 내장 LED** 다. 그래서 이 한 줄과 **눈에 보이는 불빛**이 짝이다:
-    //     `srv.send("P1","LD",1)` → LED 켜짐 → 이 줄이 `LD 1 → 성공`
-    //   ⚠ **로그가 거짓말해도 LED 는 안 한다.** 그게 이 확인이 강한 이유다.
     std::cout << "[명령] " << r.module << " " << r.value << " → " << r.kindName() << "\n";
+    if (r.kind == CmdResult::OK) return;
+
+    // OPEN 실패는 다음 서버 tick에서 세션을 안전하게 정리한다.
+    if (r.module == "ED" && r.value == 1 && g_ctrl.entryActive) g_ctrl.abortEntry = true;
+    if (r.module == "XD" && r.value == 1 && g_ctrl.exitActive)  g_ctrl.abortExit = true;
+    if (r.module == "ED" && r.value == 2) g_ctrl.retryEntryClose = true;
+    if (r.module == "XD" && r.value == 2) g_ctrl.retryExitClose = true;
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3")
+        && r.value == 0) g_ctrl.retryEntryClose = true;
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3")
+        && r.value != 0 && g_ctrl.entryActive) g_ctrl.abortEntry = true;
+}
+
+void onControllerReset(ParkingServer& srv) {
+    // LED OFF + 입구 CLOSE, 출구 CLOSE를 모두 서버가 명령한다.
+    if (!queueEntryBatch(srv, -1, 2)) g_ctrl.retryEntryClose = true;
+    if (!queueExitGate(srv, 2))       g_ctrl.retryExitClose = true;
+
+    clearEntryState();
+    clearExitState();
+    g_ctrl.abortEntry = g_ctrl.abortExit = false;
+    // 센서가 계속 활성화된 상태에서 RESET 직후 새 차량으로 중복 처리하지 않는다.
+    g_ctrl.entranceLatched = g_ctrl.entranceDetected;
+    g_ctrl.exitLatched = g_ctrl.exitDetected;
+    srv.log("[제어기] SESSION_RESET · LED OFF · 양쪽 게이트 CLOSE 요청");
+}
+
+// 현재 Arduino는 bool S 프레임만 보내고 V 값 프레임은 보내지 않는다.
+void onSensorValue(ParkingServer& srv, const std::string& spot,
+                   const std::string& module, long value) {
+    srv.log("[값] " + spot + "/" + module + " " + std::to_string(value));
+}
+
+// A1~A3, U1, U2의 모든 판단 상태는 서버가 갱신한다.
+void onOccupancy(ParkingServer& srv, const std::string& spot,
+                 const std::string& module, bool occupied,
+                 const SensorMeasure& measure) {
+    const int i = parkingIndex(module);
+    if (i >= 0) {
+        g_ctrl.slotKnown[i] = true;
+        g_ctrl.occupied[i] = occupied;
+        srv.log("[주차면] " + parkingName(i) + (occupied ? " OCCUPIED" : " EMPTY")
+                + " · 사용 " + std::to_string(occupiedCount()) + "/3");
+    } else if (module == "U1") {
+        g_ctrl.entranceKnown = true;
+        g_ctrl.entranceDetected = occupied;
+        srv.log(std::string("[입구센서] ") + (occupied ? "DETECTED" : "CLEAR"));
+    } else if (module == "U2") {
+        g_ctrl.exitKnown = true;
+        g_ctrl.exitDetected = occupied;
+        srv.log(std::string("[출구센서] ") + (occupied ? "DETECTED" : "CLEAR"));
+    }
+
+    if (measure.has)
+        srv.log("[센서값] " + spot + "/" + module + " " + std::to_string(measure.value));
+
+    // S 프레임 처리 중 호출되므로 여기서 만든 명령은 현재 하행 창에 실릴 수 있다.
+    controllerTick(srv);
 }

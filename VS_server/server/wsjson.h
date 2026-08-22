@@ -241,26 +241,11 @@
             //   이제 **판단은 `SpotBehavior::occupied()`** 가 하고 여기서는 **입력만 만든다.**
             //   🔑 그래야 기여자가 자기 자리의 판정을 갈아끼울 수 있다(2단계).
             //   ⚠ 지금은 모든 자리가 기본 구현(=지금과 같은 OR)을 쓰므로 **거동 변화가 0 이다.**
+            // 🔑 **모으는 규칙은 `zone_readings()` 한 곳에만 있다** — 점유 변화 콜백이 같은 것을 쓴다.
+            //   `I` 로 시작하는 모듈만 든다(명령 모듈의 에코 비트는 점유가 아니다 · 명세 §8.1).
             std::vector<SensorReading> readings;
             int v_known = 0, v_total = 0, v_ones = 0;
-            for (size_t m = 0; m < z.modules.size(); m++) {
-                const Node* mn = node_by_devid(z.modules[m].first);
-                int mi = -1;
-                if (mn)
-                    for (size_t k = 0; k < mn->mods.size(); k++)
-                        if (mn->mods[k].first == z.modules[m].second) { mi = (int)k; break; }
-                if (mi < 0) continue;
-                // 🔑 **점유 센서만 센다.** 명령 모듈(`O…`)은 자리 점유를 말하지 않는다(명세 §8.1).
-                // 🔴 **첫 글자만 본다** (v2 · 2026-08-20). 전에는 `!= "IP"` 로 **통째로** 비교했다 —
-                //   그러면 기여자가 `IQ`(관측·다른 종류)를 써도 **점유에서 조용히 빠진다.**
-                //   계약은 **첫 글자 `I`/`O`** 뿐이고 나머지는 기여자 자유다.
-                if (!mn || mn->mods[mi].second.empty() || mn->mods[mi].second[0] != 'I') continue;
-                v_total++;
-                const bool known = (mi < mn->mod_bits_n);
-                const bool val   = known && mn->mod_bits[mi];
-                readings.push_back(SensorReading(known, val));
-                if (known) { v_known++; if (val) v_ones++; }
-            }
+            zone_readings(z, readings, v_known, v_total, v_ones);
             if (z.kind == "parking") {
                 // 🔴 **OR 다.** 두 오류의 대가가 대칭이 아니다 —
                 //   빈 자리를 "찼다"고 하면 손해는 자리 하나이고,

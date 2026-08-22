@@ -94,6 +94,23 @@
             return;
         }
 
+        // CODEX FIX: parking_test.ino의 CMD_RESET 역할을 서버 제어기로 이동.
+        // Arduino에는 세션 판단 상태를 두지 않고 CLOSE/OFF 명령만 내려보낸다.
+        if (type == "reset_controller") {
+            if (!owner_) {
+                send_err(fd, rid, "not_ready", "서버 제어기가 준비되지 않았습니다");
+                return;
+            }
+            onControllerReset(*owner_);
+            if (fd != BAD_SOCK && conns.count(fd)) {
+                std::ostringstream o;
+                o << "{\"type\":\"controller_reset\",\"rid\":" << jstr(rid)
+                  << ",\"ok\":true}";
+                ws_send(fd, o.str());
+            }
+            return;
+        }
+
         // ---- REQ-0203 4d: 자리 조작 요청 (설계 §6.8 상행)
         // 🔑 **화면은 자리 하나만 지목한다**(`slot`). **모듈을 지목하지 않는다** —
         //   "어느 모듈이 그 조작을 맡는가"가 화면에도 생기면 서버 라우팅과 규칙이 두 곳이 되고,
@@ -275,6 +292,21 @@
             send_err(fd, rid, "device_offline", "센서가 연결되어 있지 않습니다");
             return;
         }
+
+        // CODEX FIX: the server is authoritative for occupancy/reservation
+        // decisions. Arduino receives only the already-decided R/C mirror.
+        const int server_slot = slot_index(slot);
+        if (type == "reserve" && server_slot >= 0) {
+            if (slots[server_slot].occupied) {
+                send_ack(fd, rid, slot, 1, 'R');
+                return;
+            }
+            if (slots[server_slot].reserved) {
+                send_ack(fd, rid, slot, 2, 'R');
+                return;
+            }
+        }
+
         // 🔴 같은 자리에 이미 진행 중인 하행이 있으면 **명시적으로 거절한다**(설계 §4-B).
         // 지금까지 이 검사는 `1721`·`1750`(S 프레임 판정)에서만 쓰였고 **브라우저 경로에는
         // 없었다** — 그래서 연타가 그대로 `dispatch` 를 여러 번 만들었다. 큐가 생긴 뒤에는
@@ -289,7 +321,7 @@
             send_err(fd, rid, "already_pending", "그 자리는 이미 처리 중입니다");
             return;
         }
-        // 서버가 아는 상태로 미리 거를 수도 있지만, 최종 판정은 아두이노 ACK 다(§7.2).
+        // 서버 판정이 끝난 요청만 Arduino에 로컬 mask 동기화 명령으로 내린다.
         dispatch(type == "reserve" ? 'R' : 'C', fd, rid, slot, uid);
     }
 

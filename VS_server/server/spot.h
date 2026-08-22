@@ -29,6 +29,48 @@ struct SensorReading {
 //
 // ⚠ **기본 구현을 지우지 마라.** 자리가 자기 구현을 안 주면 이것이 쓰인다 —
 //   지금 모든 자리가 그 경우이고, 그래서 이 단계의 거동 변화가 0 이다.
+class ParkingServer;
+
+// 🔴 **센서가 잰 값.** 점유 비트(`occupied`)와 **다른 축**이다 —
+//   비트는 *"문턱을 넘었나"*, 이것은 *"얼마인가"* 다. 한 칸에 합치지 마라.
+// 🔴 **`has` 와 `value` 는 붙어 다녀야 한다.** 갈라 두면 `has` 를 안 보고 `value` 를 쓰는 코드가
+//   반드시 나오고, 그때 **"못 쟀다"가 조용히 `0` 이 된다.**
+// ⚠ 단위는 **기여자의 것**이다 — 서버도 프로토콜도 모른다(초음파는 cm · 조도는 lux).
+//   단위를 알려면 라벨에 담아라: `lot.label("P1","A1","앞쪽 거리(cm)")`
+struct SensorMeasure {
+    bool has;     // 값이 있나. false 면 아래는 **뜻이 없다**
+    long value;   // 장치가 준 정수
+    SensorMeasure() : has(false), value(0) {}
+    SensorMeasure(bool h, long v) : has(h), value(v) {}
+};
+
+// 🔴 **자리 점유가 바뀌면 불린다.** `onCommandResult` 와 같은 계열이다 —
+//   기여자는 훅 하나를 더 배우는 것이 아니라 **같은 모양을 한 번 더 쓴다.**
+//   `spot`     : 자리 id · `module` : **그 값을 말한 센서 모듈 이름**
+//   `occupied` : 바뀐 **뒤**의 값. 상승(비었다→찼다)과 하강(찼다→비었다) **둘 다** 온다
+//
+// 🔴 **모듈 단위로 불린다.** 한 자리에 센서가 둘이면 **각각** 온다 —
+//   자리 하나로 합쳐서 한 번 부르지 않는다. 합칠지 말지는 **기여자가 정한다**:
+//     `if (module != "A1") return;`  ← 한 센서만 쓰겠다
+//   🔑 그래서 **콜백은 하나이고 파라미터만 하나 늘었다.** 배우는 것이 안 는다.
+// 🔑 **센서(`I*`)만 온다.** 명령 모듈의 에코는 안 온다 — 안 그러면 자기 명령이 자기를 부른다.
+// ⚠ 서버의 한 박자 안에서 불린다. 오래 걸리는 일을 하지 마라.
+// 🔴 **값이 올 때마다 불린다** — 점유가 안 바뀌어도 온다.
+//   `onOccupancy` 는 **상태가 바뀔 때**의 콜백이고 이것은 **값이 흐를 때**의 콜백이다.
+//   차가 60 → 40 → 20cm 로 들어와도 점유는 계속 1 이라 `onOccupancy` 가 안 불린다 —
+//   🔑 **주차 유도(거리 표시·근접 경고)가 이 콜백의 존재 이유다.**
+//
+// 🔑 **`has` 가 없다.** 값이 있을 때만 부르기 때문이다 — *"못 쟀다"* 는 사건이 아니다.
+// ⚠ 단위는 **기여자의 것**이다(§`SensorMeasure`).
+// ⚠ **자주 불린다** — 슬롯당 센서 수만큼(초당 약 k/1.2회). 여기서 무거운 일을 하면 박자를 먹는다.
+//   거르고 싶으면 **기여자가 거른다.** 서버가 문턱을 정하면 그 문턱을 누가 정하는지가 또 빈 자리가 된다.
+typedef void (*SensorValueFn)(ParkingServer& srv, const std::string& spot,
+                              const std::string& module, long value);
+
+typedef void (*OccupancyFn)(ParkingServer& srv, const std::string& spot,
+                            const std::string& module, bool occupied,
+                            const SensorMeasure& measure);
+
 struct SpotBehavior {
     virtual ~SpotBehavior() {}
 

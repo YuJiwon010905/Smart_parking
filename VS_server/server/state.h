@@ -291,6 +291,24 @@
     CmdResultFn cmd_cb_;
     long long   cb_ok_, cb_rejected_, cb_noanswer_;   // 갈래별 누계. 요약에 싣는다
 
+    // ── 자리 점유 변화 콜백 (`spot.h` 의 `OccupancyFn`) ─────────────────────
+    // 🔑 등록 안 해도 **계수는 센다** — 볼 자리를 선택적인 것에 묶지 않는다.
+    OccupancyFn   occ_cb_;
+    SensorValueFn val_cb_;                 // 🔑 값이 올 때마다. 등록 안 해도 계수는 센다
+    ParkingServer* owner_;                 // 콜백에 넘길 공개 객체. 없으면 콜백을 안 부른다
+    std::map<std::string, bool> occ_prev_; // 자리 id → 직전 점유
+    // 🔴 **키가 없으면 "아직 안 봤다" 이고, 그때는 콜백을 안 부른다.**
+    //   안 그러면 기동 직후 모든 자리가 한 번씩 "변했다"로 불린다 — 그건 변화가 아니라 첫 관측이다.
+    long long occ_change_n_;               // 변화 횟수(상승+하강). 요약에 싣는다
+    // ── `V` 계수. 🔑 **`값없음` 은 모듈별 분모가 필요하지만 우선 전체부터 센다**
+    //   ⚠ 전체만 보면 **항상 빈 센서 하나가 분모를 채워 다른 센서의 비율을 가린다**(실측으로 겪었다)
+    long long vframes, vvalues, vmissing, vmalformed;
+    // 🔴 **하강만 한 프레임 확인한다** — 초음파는 **간헐 반사 실패**로 한 프레임 `0` 을 낸다
+    //   (monitor 실측: `8 → 0 → 8`). 그것을 변화로 읽으면 **아무도 안 건드렸는데 LED 가 토글된다.**
+    //   🔑 실패 모드가 **거짓 0** 한쪽이므로 지연도 한쪽에만 건다 — 상승은 즉시다.
+    //     그래서 사용자가 손을 대는 순간의 반응은 **안 느려진다.**
+    std::map<std::string, int> occ_fall_n_;   // 자리 id → 하강 후보를 연속 몇 번 봤나
+
     NodeLedger ledger_;
     long long  ledger_new_, ledger_review_;   // 이 인스턴스에서 본 사건 수(요약에 싣는다)
 

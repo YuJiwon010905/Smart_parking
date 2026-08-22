@@ -152,6 +152,28 @@ index.html — 🔴 web-engineer 가 넣는다. 이 폴더에서 그 파일만 w
 
 ---
 
+## 🔑 세 트리의 차이 — **의도된 것과 낡은 것을 갈라 적는다**
+
+```
+server/       운영. **unity 빌드**(`#include "lot.cpp"`) · `selftest_*` **8개를 싣는다**
+dev_server/   기여자 배포. **진짜 번역 단위**(VS 가 폴더의 .cpp 를 전부 컴파일한다)
+VS_server/    Windows. dev 와 **같은 소스** + VS 프로젝트 파일
+```
+| 무엇 | 어디 | 왜 — **의도다** |
+|---|---|---|
+| `selftest_*` 8개 | **server 에만** | 🔑 기여자 배포에 시험을 안 싣는다. 배포 묶음이 작아야 하고, 기여자가 고칠 것도 아니다. ⚠ **낡아서 빠진 것이 아니다** |
+| `EXAMPLES.cpp` · `GUIDE-*.md` · `README.md` | **dev·VS 에만** | 기여자가 읽는 것. 운영 트리에 둘 이유가 없다 |
+| `index.html` | dev·VS 에만 | **web 소유**. 서버 소스가 아니다 |
+| `config.h` 포트 3줄 | server ≠ dev·VS | 동시에 돌려야 한다(운영 8888/9990/8911 · dev 9900/9991/5500) |
+| `entry.h` · `listen.h` · `runtime.h` · `serve.h` | server ≠ dev·VS | dev 는 **콘솔 전용**(파일 로그 없음 · 자가검증 없음 · 소크 요약 안 찍음 · 실패를 사람 말로) |
+| `parking.h` 훅 선언 · `server.cpp` include | server ≠ dev·VS | `lot.cpp` 가 진짜 번역 단위라서 |
+| 🔴 `entry.h` 의 `#include <windows.h>` · `SetConsoleOutputCP(65001)` | **VS 에만** | Windows 콘솔 UTF-8 |
+| 🔴 `server.cpp` 의 `#define _CRT_SECURE_NO_WARNINGS` | **VS 에만** | MSVC 경고 |
+| `server.slnx` · `.vcxproj` · `.filters` | VS 에만 | VS 빌드 정의 |
+
+> ### 🔴 **위 목록에 없는 차이는 "낡음"이다.** 갱신하는 사람은 `git hash-object` 로 파일별 대조하고
+> ### 다른 것만 **내용으로** 반영해라 — **파일 복사 금지**(사용자 확정). 위 셋은 **살려 둔다.**
+
 ## ⚠ 이 트리(`VS_server/`)는 **자동 검사 밖이다**
 
 ```

@@ -41,6 +41,21 @@ void example_area(ParkingLot& lot) {
     lot.spot("E1").at(0, 2).label("입구");
 }
 
+// ── ③-b 🔴 **여러 보드로 늘린다 — 확장은 세로가 아니라 가로다** ────────────
+//   한 보드에 센서를 많이 붙이면 **그 보드의 회선**이 먼저 막힌다
+//   (센서 6개부터 하행 묶음이 4 → 3 으로 준다 · `docs/net/SPEC-sensor-value.md` §9).
+//   🔑 **보드를 늘리면 회선이 장치마다 따로다.** 조별과제 구조와 그대로 맞는다.
+//   ⚠ 서버가 받는 보드 수 상한은 **8** 이다(`MAX_ARD_NODES`). 넘으면 **새 연결을 거절한다** —
+//     살아 있는 노드를 쫓아내지 않는다.
+void example_many_boards(ParkingLot& lot) {
+    // 내 보드
+    lot.spot("A1").at(0, 0).parking().label("1번").module("P1", "A1");
+    // 🔓 남의 보드 — **devid 만 다르다.** 그 사람이 자기 client.ino 에 그 id 를 적는다
+    lot.spot("A6").at(1, 0).parking().label("6번").module("KIM01", "C1");
+    lot.spot("A7").at(1, 1).parking().label("7번").module("LEE02", "D1");
+    // 🔑 명령도 같다 — `srv.send("KIM01", "LD", 1)` 로 **남의 보드**에 지시한다(example_send 참고)
+}
+
 // ── ④ 센서 이중화 + 내 판정 ─────────────────────────────────────────────
 //   기본은 OR(하나라도 차면 찼다). 두 오류의 대가가 다르기 때문이다 —
 //   빈 자리를 "찼다"고 하면 손해는 자리 하나이고, **찬 자리를 "비었다"고 하면 운전자가 못 댄다.**
@@ -92,7 +107,49 @@ void example_send(ParkingServer& srv) {
     }
 }
 
-// ── ⑦ 명령 결과 — 갈래가 셋이고 고치는 곳이 다르다 ────────────────────────
+// ── ⑦ 점유가 바뀌면 — **센서 변화로 다른 장치를 움직인다** ─────────────────
+//   🔑 상승·하강 **둘 다** 온다. 한쪽만 쓰려면 `occupied` 로 갈라라.
+//   🔑 **첫 관측에서는 안 불린다** — 기동 직후 값은 변화가 아니라 처음 본 것이다.
+void example_occupancy(ParkingServer& srv, const std::string& spot,
+                       const std::string& module, bool occupied,
+                       const SensorMeasure& measure) {
+    // 🔴 값을 쓰기 전에 **`has` 를 본다.** 없으면 `value` 는 뜻이 없다("못 쟀다"이지 0 이 아니다)
+    if (measure.has) std::cout << module << " = " << measure.value << "\n";
+
+    // 🔓 **모듈 단위로 온다.** 한 자리에 센서가 둘이면 각각 불린다 —
+    //   합칠지 말지는 **네 선택**이다. 한쪽만 쓰려면 아래를 켜라.
+    // if (module != "A1") return;
+    (void)module;
+    if (spot != "A1" || !occupied) return;      // 잡힐 때만(0→1)
+
+    static bool ledOn = false;                  // 🔑 다음 호출까지 살아야 한다
+    ledOn = !ledOn;
+    srv.send("P1", "LD", ledOn ? 1 : 0);        // 내 장치
+    srv.send("KIM01", "LD", ledOn ? 1 : 0);     // 🔓 **남의 장치도 된다** — 첫 인자가 devid 다
+
+    // ⚠ **재귀하지 않는다.** 점유는 `I` 로 시작하는 모듈만 보고 `LD` 는 `OG`(명령)라
+    //   그 에코 비트가 점유에 안 들어간다. 자가검증이 음성 대조로 그것을 지킨다.
+    // ⚠ 이 `ledOn` 은 **내 의도**이지 장치의 실제 상태가 아니다. 명령이 거절되면 갈린다 —
+    //   실제 상태는 다음 `S` 의 에코 비트가 말하고, 그것은 최대 한 슬롯 뒤에 온다.
+}
+
+// ── ⑦-b 🔴 **값이 흐를 때 — 주차 유도** ──────────────────────────────────
+//   🔑 ⑦(점유 변화)과 **다른 사건**이다. 차가 60 → 40 → 20cm 로 들어오는 동안
+//     점유는 계속 "찼다" 라서 ⑦은 **한 번도 안 불린다.** 거리를 보려면 여기다.
+//   ⚠ 값이 **있을 때만** 온다("못 쟀다" 는 사건이 아니다) · **자주 온다**(슬롯당 센서 수만큼)
+void example_sensor_value(ParkingServer& srv, const std::string& spot,
+                          const std::string& module, long value) {
+    (void)spot;
+    if (module != "A1") return;             // 🔓 거르는 것은 네 몫이다
+
+    srv.send("P1", "L2", value);            // 거리를 표시기에 그대로
+
+    // 🔓 또는 거리에 따라 다르게 — **뜻을 정하는 것은 너다**
+    // if (value < 20)      srv.send("P1", "LD", 1);   // 너무 가깝다 → 경고등
+    // else if (value < 60) srv.send("P1", "LD", 0);
+}
+
+// ── ⑧ 명령 결과 — 갈래가 셋이고 고치는 곳이 다르다 ────────────────────────
 //   성공     : 장치가 받았고 콜백이 true 를 냈다
 //   거절     : 장치가 **답했고** 거절했다 → 값·등록을 고쳐라. **재시도는 뜻이 없다**
 //   무응답   : 🔴 답이 없다(재전송 소진) → **장치·링크 문제다.** 콜백 로직을 고쳐도 안 낫는다

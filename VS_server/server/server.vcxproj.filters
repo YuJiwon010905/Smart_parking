@@ -15,6 +15,23 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="lot_codex_fixed.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="server_codex_fixed.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="EXAMPLES.cpp">
+      <Filter>헤더 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="lot.cpp">
+      <Filter>헤더 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="server.cpp">
+      <Filter>헤더 파일</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="cli.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
@@ -36,10 +53,16 @@
     <ClInclude Include="http.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="http_codex_fixed.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="ledger.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="listen.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="listen_codex_fixed.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="lot.h">
@@ -54,7 +77,13 @@
     <ClInclude Include="nodes.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="nodes_codex_fixed.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="parking.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="parking_codex_fixed.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="persist.h">
@@ -96,6 +125,9 @@
     <ClInclude Include="wsapi.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClInclude Include="wsapi_codex_fixed.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClInclude Include="wsjson.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
@@ -104,22 +136,17 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="GUIDE-sample.md">
+      <Filter>헤더 파일</Filter>
+    </None>
+    <None Include="GUIDE-server-says.md">
+      <Filter>헤더 파일</Filter>
+    </None>
     <None Include="index.html">
       <Filter>헤더 파일</Filter>
     </None>
     <None Include="README.md">
       <Filter>헤더 파일</Filter>
     </None>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="EXAMPLES.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="lot.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="server.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

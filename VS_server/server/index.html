@@ -17,7 +17,7 @@
   자기 자신을 포함해서 재면 값이 자기를 바꿔 영원히 안 맞는다 — 그래서 정규화 후에 잰다.
   판정: `web/tools/deploy-screen.mjs --check`
 -->
-<meta name="screen-build" content="src=6b2461ca7f58 git=b9d501c+dirty at=2026-08-20T07:32:27">
+<meta name="screen-build" content="src=f9f21fdc36cf git=22cbf2d at=2026-08-21T00:43:31">
 <title>주차 관제 — 실시간 자리 현황</title>
 <!--
   주차 관제 데모 (단일 파일 · 외부 의존성 없음)
@@ -53,6 +53,14 @@
     --done-line:   #2f6fed;
     --done-ink:    #14448f;
 
+    /* 🔴 비활성 자리(REQ-0296 · 사용자 지시 "회색"). **`--occ-*`(상태 미상)와 값이 달라야 한다** —
+       같으면 *"값을 기다리는 자리"* 와 *"영원히 값이 없는 자리"* 가 구분되지 않는다. */
+    /* 🔴 **무채색이어야 한다** (R=G=B). 사용자가 말한 것은 "회색"이고, 살짝 푸른 회색을 쓰면
+       옆의 `--occ-*`(상태 미상, 푸른 기가 있다)와 눈에서 다시 붙는다. 그래서 채도를 0으로 둔다. */
+    --inact-bg:    #dedede;
+    --inact-line:  #949494;
+    --inact-ink:   #5c5c5c;
+
     --mine:        #7a3ff2;
     --warn-bg:     #fdeaea;
     --warn-line:   #d64545;
@@ -86,6 +94,10 @@
       --done-line: #6c9bff;
       --done-ink:  #a9c6ff;
 
+      --inact-bg:   #303030;
+      --inact-line: #767676;
+      --inact-ink:  #b4b4b4;
+
       --mine:      #b18cff;
       --warn-bg:   #331a1a;
       --warn-line: #e06a6a;
@@ -109,7 +121,13 @@
     line-height: 1.5;
   }
 
+  /* 🔴 폭 단계 (REQ-0289 · 사용자: *"기본화면이 세로 기준이다. PC 화면에서는 넓게 보고 싶다"*).
+     미디어쿼리가 **좁은 화면 분기 하나뿐**이라 넓은 모니터에서 가운데만 쓰고 세로로 길어졌다.
+     🔑 무한정 넓히지 않는다 — 글줄이 길어지면 읽기가 나빠진다. 그래서 **단계**를 둔다. */
   .wrap { max-width: 1060px; margin: 0 auto; }
+  @media (min-width: 1200px) { .wrap { max-width: 1400px; } }
+  @media (min-width: 1600px) { .wrap { max-width: 1760px; } }
+  @media (min-width: 2100px) { .wrap { max-width: 2000px; } }
 
   .topbar {
     display: flex; flex-wrap: wrap; gap: 12px;
@@ -148,8 +166,31 @@
   }
   .demo-tools button:hover { border-color: var(--accent); color: var(--accent); }
 
-  main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(230px, 1fr); gap: 16px; align-items: start; }
-  @media (max-width: 780px) { main { grid-template-columns: minmax(0, 1fr); } }
+  /* ── 판 배치 — 🔴 **`grid-template-areas` 로 못 박는다** (REQ-0289) ──────────
+     자동 흐름에 맡기면 판이 셋인데 열이 둘일 때 **세 번째가 다음 줄 첫 칸으로 떨어진다**
+     (격자 아래에 '그 밖'이 끼어든다). 이름으로 배치하면 열 수가 바뀌어도 자리가 안 흔들린다.
+     🔑 HTML 순서는 **1열에서 읽는 순서**이고, 여기서는 그 순서를 바꾸지 않는다. */
+  main { display: grid; gap: 16px; align-items: start;
+         grid-template-columns: minmax(0, 1.55fr) minmax(230px, 1fr);
+         grid-template-areas: "grid detail" "grid info"; }
+  .pane--grid   { grid-area: grid; }
+  .pane--detail { grid-area: detail; }
+  .pane--info   { grid-area: info; }
+  @media (max-width: 780px) {
+    main { grid-template-columns: minmax(0, 1fr);
+           grid-template-areas: "grid" "detail" "info"; }
+  }
+  /* 넓은 화면 ① — 2열을 유지하고 **남는 가로를 격자에 준다.** 상세 패널도 같이 넓어진다
+     (`control` 위젯의 숫자 칸·버튼이 줄바꿈되지 않을 만큼은 줘야 한다). */
+  @media (min-width: 1200px) {
+    main { grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr); }
+  }
+  /* 넓은 화면 ② — **3열.** 격자 · 선택한 자리 · 그 밖.
+     🔴 여기서 세로가 짧아지는 것이 이 REQ 의 목적이다: 둘째 열에 쌓여 있던 두 판이 나란히 선다. */
+  @media (min-width: 1600px) {
+    main { grid-template-columns: minmax(0, 2fr) minmax(330px, 1fr) minmax(300px, 0.9fr);
+           grid-template-areas: "grid detail info"; }
+  }
 
   section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
   section h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-dim); }
@@ -199,20 +240,57 @@
 
   /* ── 개정 격자 ─────────────────────────────────────────────────────────
      `--zrows`/`--zcols` 는 **맵 정의에서 온다.** 🔴 CSS 에 5 를 박지 않는다(원장 §5.42). */
+  /* 🔴 **행 높이를 내용에서 뗀다** (REQ-0288 · 사용자가 실물에서 관측).
+     grid 는 행 높이를 **그 행의 가장 큰 칸**에 맞춘다 → 모듈이 많은 자리 하나가 그 행 전체를 늘렸다.
+     자리마다 모듈 수가 다를 수밖에 없으니 **구조적으로 재발한다.**
+     → `grid-auto-rows` 로 **행 높이를 고정**한다. 칸 안에 무엇이 들어와도 격자가 안 변한다.
+     🔑 `aspect-ratio` 를 쓰지 않았다 — `span 2` 인 칸이 **두 배로 높아져** 행이 다시 울퉁불퉁해진다.
+     🔴 **그래서 칸에는 요약만 넣는다.** 고정 높이 + 늘어나는 내용 = 잘림이고, 잘린 정보는 없는 정보다.
+        모듈 목록과 조작은 **우측 패널**이 받는다. */
   .zgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
-           grid-template-columns: repeat(var(--zcols, 1), minmax(0, 1fr)); }
+           grid-template-columns: repeat(var(--zcols, 1), minmax(0, 1fr));
+           grid-auto-rows: var(--zrowh, 92px); }
+  /* 🔴 넓어지면 칸이 **납작해진다** — 폭만 늘고 높이는 고정이라 도면처럼 안 보인다.
+     그래서 행 높이도 단계로 올린다. **높이를 정하는 것은 여전히 뷰포트뿐이다** —
+     모듈 수는 어디에도 안 들어간다(REQ-0288 합격선이 그대로 성립한다). */
+  @media (min-width: 1200px) { .zgrid { --zrowh: 104px; } }
+  @media (min-width: 1600px) { .zgrid { --zrowh: 116px; } }
+  .zgrid > li { min-width: 0; }
   /* 🔴 빈 칸 — **자리가 아니다.** 초점을 받지 않고 보조기술에서 숨는다.
      `5×5` 에 자리 5 + 입출구면 빈 칸이 18개다 — 전부 탭 정지점이면 접근성 결함이다(설계서 §5.1). */
   /* 🔴 "이어짐" — **빈 칸이 아니다.** 자리는 있는데 그 자리를 왼쪽 칸에서 이미 그린 것이다.
      빈 칸과 같은 무늬로 그리면 **자리가 없는 것처럼 보인다.** */
-  .zcell--cont { border: 1px dashed var(--line); border-radius: 10px; min-height: 96px;
+  .zcell--cont { border: 1px dashed var(--line); border-radius: 10px; height: 100%;
                  background: color-mix(in srgb, var(--panel) 40%, transparent); }
   .zcell--empty { border: 1px dashed transparent; background: repeating-linear-gradient(
-                    45deg, transparent 0 6px, rgba(127,127,127,.07) 6px 12px); border-radius: 10px; min-height: 96px; }
-  .zone { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; min-height: 96px;
+                    45deg, transparent 0 6px, rgba(127,127,127,.07) 6px 12px); border-radius: 10px; height: 100%; }
+  /* 🔴 칸은 **버튼이다.** `div` 로 버튼을 만들지 않는다 — 초점·엔터·스페이스·역할이 공짜로 온다.
+     🔑 `overflow: hidden` 은 안전망이지 설계가 아니다. 칸에 넣는 것은 요약뿐이므로 넘칠 것이 없다. */
+  .zone { display: flex; flex-direction: column; gap: 3px; padding: 7px 9px;
+          width: 100%; height: 100%; overflow: hidden; text-align: left; font: inherit; cursor: pointer;
           border: 2px solid var(--occ-line); border-radius: 10px;
           background: var(--occ-bg); color: var(--occ-ink); }
+  /* 선택 표시 — 🔴 색만으로 나르지 않는다. 테두리 링 + 칸 안의 `▸` 글자 + `aria-current`. */
+  .zone[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .zone__inactive { font-size: 10.5px; font-weight: 700; }
+  .zone:hover { filter: brightness(1.03); }
   .zone[data-usable="0"] { border-style: dotted; color: var(--ink-dim); }   /* 미상 자리 */
+  /* 🔑 옛 격자(`.tile`)와 **같은 변수**를 쓴다 — 범례가 두 벌이 되면 색의 뜻이 갈린다. */
+  .zone[data-view="free"]     { background: var(--free-bg); border-color: var(--free-line); color: var(--free-ink); }
+  .zone[data-view="reserved"] { background: var(--resv-bg); border-color: var(--resv-line); color: var(--resv-ink); }
+  .zone[data-view="occupied"] { background: var(--occ-bg);  border-color: var(--occ-line);  color: var(--occ-ink); }
+  .zone[data-view="done"]     { background: var(--done-bg); border-color: var(--done-line); color: var(--done-ink); }
+  .zone[data-view="unknown"]  { background: var(--occ-bg);  border-color: var(--line); color: var(--ink-dim); border-style: dotted; }
+  /* 🔴 **비활성 자리 — 회색** (REQ-0296 · 사용자 지시). 위 `data-view` 규칙들 **뒤에** 있어야 한다:
+     그쪽은 `background` **단축 속성**이라 뒤에 오지 않으면 여기의 무늬가 조용히 지워진다.
+     ⚠ 그래서 여기서는 `background-color` 와 `background-image` 를 **따로** 준다(단축을 쓰면 서로 지운다).
+     🔑 색만으로 나르지 않는다: 회색 + 점선 + 흐림 + 사선 + 칸 안의 `⏸` 문구가 같이 간다.
+        초점·클릭은 막지 않는다 — 눌러서 **왜 못 쓰는지** 오른쪽에서 읽어야 한다(§3.2 의 그 이유). */
+  .zone[data-view="inactive"] {
+    background-color: var(--inact-bg); border-color: var(--inact-line); color: var(--inact-ink);
+    border-style: dashed; opacity: .78;
+    background-image: repeating-linear-gradient(45deg, rgba(127,127,127,.16) 0 5px, rgba(127,127,127,0) 5px 10px);
+  }
   .zone__head { display: flex; align-items: baseline; gap: 6px; }
   /* 표시 이름이 주(主), 날 id 는 부제. 🔴 **부제를 display:none 으로 감추지 마라** —
      로그와 맞추는 유일한 값이고, 감추면 스크린리더에서도 사라진다. */
@@ -220,6 +298,21 @@
   .zone__id   { font-weight: 800; font-family: ui-monospace, Menlo, monospace; }
   .zone__name + .zone__id { font-weight: 600; font-size: 11px; opacity: .7; }
   .zone__sum  { font-size: 13px; font-weight: 700; }
+  /* 모듈 수 배지 — 🔴 **수만** 말한다. 목록은 패널의 몫이다. `0` 도 적는다(빈 것이 보여야 한다). */
+  .zone__badge { margin-left: auto; flex: 0 0 auto; font-size: 10.5px; font-weight: 700;
+                 padding: 0 5px; border-radius: 999px; border: 1px solid var(--line);
+                 background: color-mix(in srgb, var(--panel) 70%, transparent); }
+  .zone__badge[data-empty="1"] { border-style: dashed; color: var(--ink-dim); }
+
+  /* ── 우측 패널 — 선택한 자리의 상세 (REQ-0288 ③안) ────────────────────
+     🔑 **새 레이아웃을 만들지 않았다.** `main` 의 둘째 열(`.side`)이 이미 있고 그 안에 들어간다.
+     여기 오는 것: 노드 박스 > 모듈 행 > `control` 위젯 · 그리고 자리 조작 버튼.
+     🔴 **칸에 있던 것을 옮긴 것이다. 새로 만든 것이 아니다** — 그래서 `.znode`·`.zmod`·`.zctl` CSS 를
+     그대로 쓴다(클래스 기반이라 자리만 바뀐다). 두 벌로 갈리면 그때부터 서로 다르게 낡는다. */
+  .zpanel { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+            background: color-mix(in srgb, var(--panel) 55%, transparent); }
+  .zpanel__head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .zpanel__empty { font-size: 12px; color: var(--ink-dim); }
   /* ── 노드 박스 (박스 안의 박스) — REQ-0261 ────────────────────────────
      영역 박스 > **노드 박스** > 모듈 리스트. 한 영역에 노드가 여럿일 수 있다.
      🔴 지금 지형은 영역당 1대라 1:1 로 보이지만 **곧 둘이 된다**(REQ-0260) — 층을 빼지 않는다. */
@@ -270,6 +363,8 @@
      이 규칙 덕에 20~30개가 다 떠 있어도 눈에 걸리는 것은 막는 것뿐이다. */
   .zmod[data-loud="0"] { opacity: .55; }
   .zmod[data-loud="1"] { font-weight: 700; }
+  /* 🔴 겹침 경고 — **가려진 자리가 있다는 것은 조용하면 안 된다.** */
+  .zone__overlap { font-size: 10.5px; color: #a06800; margin-top: 2px; }
   .zone__acts { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
   .zbtn { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 8px; cursor: pointer;
           border: 1px solid var(--line); background: var(--panel); color: inherit; }
@@ -288,6 +383,10 @@
   .swatch--occ  { background: var(--occ-bg);  border-color: var(--occ-line); }
   .swatch--done { background: var(--done-bg); border-color: var(--done-line); }
   .swatch--mine { background: transparent;    border-color: var(--mine); }
+  /* 🔑 칸과 **같은 변수**를 쓴다. 견본에 색을 따로 박으면 칸 색을 바꿀 때 범례만 낡는다. */
+  .swatch--inact { background-color: var(--inact-bg); border-color: var(--inact-line); border-style: dashed;
+                   background-image: repeating-linear-gradient(45deg, rgba(127,127,127,.16) 0 3px, rgba(127,127,127,0) 3px 6px); }
+  .swatch--unk   { background: var(--occ-bg); border-color: var(--line); border-style: dotted; }
   .swatch--inject {
     border-color: #c0392b; border-style: dashed;
     background-image: repeating-linear-gradient(45deg, rgba(192,57,43,.5) 0 3px, rgba(192,57,43,0) 3px 6px);
@@ -448,7 +547,13 @@
   <header class="topbar">
     <div class="topbar__title">
       <h1>주차 관제</h1>
-      <p class="sub">2열 5행 · 10칸 · 빈자리를 눌러 예약합니다</p>
+      <!-- 🔴 **정적 문구로 지형을 설명하지 않는다** (REQ-0290 · 사용자: *"안내대로 동작하지 않는다"*).
+           있던 문구: `2열 5행 · 10칸 · 빈자리를 눌러 예약합니다` — 둘 다 틀렸다:
+             ① 지형이 v2 로 바뀌어 자리 수·행열이 다르다 (옛 데모 지형을 설명하고 있었다)
+             ② 🔴 **칸을 눌러도 예약이 안 된다.** REQ-0288 부터 칸 클릭은 *선택* 이고 조작은 우측 패널이다
+                → 안내가 없는 동작을 하라고 시키고 있었다. 사용자는 그대로 했고 아무 일도 안 났다
+           🔑 지형은 `map` 봉투가 준다. 문구를 그것으로 만들면 낡지 않는다. -->
+      <p class="sub" id="grid-sub">연결 준비 중…</p>
     </div>
     <div class="topbar__status">
       <p id="conn-status" class="conn" role="status" aria-live="polite">
@@ -474,7 +579,7 @@
   <p id="slots-banner" class="banner banner--warn" role="status" aria-live="polite" hidden></p>
 
   <main>
-    <section aria-labelledby="grid-title">
+    <section class="pane pane--grid" aria-labelledby="grid-title">
       <h2 id="grid-title">자리 현황</h2>
       <div class="grid-head" id="grid-head" aria-hidden="true"><span>열 A</span><span>열 B</span></div>
       <ul id="grid" class="grid" role="list"></ul>
@@ -490,11 +595,27 @@
         <li><span class="swatch swatch--done" aria-hidden="true"></span>예약한 자리에 입차 완료 (1 · 1) — 정상 완료</li>
         <li><span class="swatch swatch--mine" aria-hidden="true"></span>보라 테두리 = 내 예약</li>
         <li><span class="swatch swatch--inject" aria-hidden="true"></span>빨간 빗금 + ⚑주입값 = 테스트 모드로 주입된 가짜 점유값</li>
+        <!-- 🔴 이 둘은 **나란히 있어야 뜻이 산다** (REQ-0296). 따로 떨어뜨리면 읽는 사람이
+             "회색"과 "점선 미상"을 같은 것으로 읽는다 — 그것이 색을 가른 이유 자체를 없앤다. -->
+        <li><span class="swatch swatch--inact" aria-hidden="true"></span>
+            <strong>회색 + 사선 + ⏸</strong> = 모듈이 없어 <strong>사용할 수 없는 자리</strong> —
+            점유는 “모름”이고 <strong>기다려도 값이 오지 않는다</strong> (빈 자리라는 뜻이 아님)</li>
+        <li><span class="swatch swatch--unk" aria-hidden="true"></span>
+            점선 = 상태 <strong>미상</strong> — 모듈은 있는데 값이 <strong>아직</strong> 안 왔다 (오면 채워진다)</li>
         <li><span class="swatch swatch--stale" aria-hidden="true"></span>격자 전체가 흐려지고 ⏱ 표시 = 그 값을 받은 뒤로 <strong>확인된 바 없음</strong> (지금 값이 아닐 수 있음)</li>
       </ul>
     </section>
 
-    <section class="side" aria-labelledby="side-title">
+    <!-- 🔴 판을 **셋으로 가른다** (REQ-0289). 열 배치는 CSS `grid-template-areas` 가 정한다 —
+         좁은 화면 1열 · 보통 2열(상세와 그 밖이 둘째 열에 쌓인다) · 아주 넓으면 3열.
+         🔑 HTML 순서는 **좁은 화면의 읽는 순서**다: 격자 → 선택한 자리 → 그 밖. -->
+    <section class="pane pane--detail side" aria-labelledby="zsel-title">
+      <!-- 🔴 선택한 자리의 상세 (REQ-0288 ③안). 격자 칸은 요약만 그리고 **여기가 목록과 조작을 받는다.** -->
+      <h2 id="zsel-title">선택한 자리</h2>
+      <div id="zone-detail" class="zpanel"></div>
+    </section>
+
+    <section class="pane pane--info side" aria-labelledby="side-title">
       <h2 id="side-title">장치 상태</h2>
       <dl>
         <dt>센서</dt>      <dd id="dev-online">-</dd>
@@ -509,6 +630,14 @@
         <dt>마지막 갱신</dt><dd id="dev-age">-</dd>
       </dl>
 
+      <!-- 🔴 **시뮬 한 걸음은 데모에서만 보인다** (REQ-0301 · socket 발견).
+           실기에서는 `{"type":"sim_step"}` → 서버 → 전선 `M,<rid>,` → 장치가 **항상 result=5** 다:
+           장치의 `srcReal=0b11`(핀 둘)이라 **시뮬 갈래가 도달 불가**이고 arduino 의 REQ-0299 뒤에도 같다.
+           즉 실기에서는 **누르면 반드시 거절되는 버튼**이었다 —
+           우리 원칙(*"`actions` 가 있는 이유는 실패할 것을 안 내놓는 것"*)의 정확한 반례다.
+           🔑 **그런데 데모에서는 실제로 동작한다**(아래 `handleSimStep` → `result:0` · 점유가 뒤집힌다).
+              그래서 지우지 않고 **모드로 갈랐다.** 지우면 되는 기능을 죽이는 것이다. -->
+      <div id="sim-block" hidden>
       <h2 id="sim-title">시뮬레이션</h2>
       <div class="sim-panel">
         <button id="sim-step" type="button" class="sim-btn">▶ 한 걸음 진행</button>
@@ -518,7 +647,9 @@
           누를 때마다 <strong>자리 하나만</strong> 바뀝니다. 예약된 빈 칸이 있으면 그 칸부터 채웁니다(§12B.2).
           <br><strong>테스트 모드와 무관합니다</strong> — 무장하지 않아도 되고, 이 버튼으로 바뀐 값에는
           주입 표시가 붙지 않습니다.
+          <br>🔴 <strong>데모에서만 보입니다</strong> — 실기 장치에는 시뮬 갈래가 없어 항상 거절됩니다(REQ-0301).
         </p>
+      </div>
       </div>
 
       <h2 id="test-title">테스트 모드</h2>
@@ -773,6 +904,18 @@ const RID_MAX      = 32;   // §4.1 브라우저 rid 는 최대 32자 불투명 
    ──────────────────────────────────────────────────────────────── */
 
 /** docs/net/parking-protocol.md §5.3 의 스냅샷 예제 그대로 (v1.2 / 개정 3 형태) */
+/**
+ * 🔴 **데모 자료는 실기에 없는 세계를 만들어 준다** — 그 사실을 여기 적어 둔다 (REQ-0290 · 루트 지시).
+ *
+ * 이 배열은 **옛 봉투(`snapshot.slots` 10칸 · `A1..A5,B1..B5`)** 의 세계다. 실기는 v2 부터
+ * `map`/`state`(자리 `kind`: `parking`/`area`)로 오고 **자리 수도 지형이 정한다.**
+ * 그래서 `?demo=1` 이나 파일 폴백에서 되는 것이 **실기에서 된다는 뜻이 아니다.**
+ *
+ * ⚠ 실제로 그것 때문에 결함을 하나 늦게 찾았다: 예약 확인 뒤 재검증이 `snapshot.slots` 를 보고 있었고
+ * **데모에서는 그 목록이 있어서 통과**했다. 새 봉투만 오는 실기에서는 전선에 아무것도 안 나갔다(REQ-0290).
+ * 🔑 §"시험이 실기가 안 하는 준비를 대신해 준다" 의 실물이다 — **지우지 않는다**(폴백이 이걸 쓴다).
+ *    대신 **데모에서 초록인 것을 실기 근거로 쓰지 마라.**
+ */
 const DEMO_SNAPSHOT = {
   type: 'snapshot',
   ts: 1755100000000,
@@ -980,6 +1123,10 @@ const state = {
   heldState: null,
   map: null,          // { epoch, rows, cols, zones:[…] } — 지형 사본. null = 아직 못 받았다
   zoneState: null,    // { epoch, ts_ms, zones:[…] }      — 마지막으로 받은 상태
+  /* 🔴 격자에서 **선택한 자리** id (REQ-0288). 상세·조작은 우측 패널이 그린다.
+     ⚠ `null` 이면 렌더가 **첫 자리를 자동으로 고른다** — 패널이 빈 채로 시작하면 사용자가
+     *"조작이 어디 갔지"* 를 먼저 겪는다. 지형이 바뀌어 그 자리가 사라지면 다시 첫 자리로 떨어진다. */
+  selZone: null,
   /** epoch 불일치를 본 적이 있나. 🔴 그동안은 **옛 사본으로 그리지 않고 "모른다"로 그린다.** */
   mapStale: false,
   mapAskedAt: 0,      // get_map 을 마지막으로 보낸 시각 — 무한 재요청 방지
@@ -1201,6 +1348,8 @@ const el = {
   staleBanner: document.getElementById('stale-banner'),
   slotsBanner: document.getElementById('slots-banner'),
   zoneGrid: document.getElementById('zone-grid'),
+  zoneDetail: document.getElementById('zone-detail'),
+  gridSub: document.getElementById('grid-sub'),
   gridHead: document.getElementById('grid-head'),
   demoBanner:  document.getElementById('demo-banner'),
   demoTools:   document.getElementById('demo-tools'),
@@ -1218,6 +1367,7 @@ const el = {
   dialogTitle: document.getElementById('confirm-title'),
   dialogBody:  document.getElementById('confirm-body'),
   simStep:     document.getElementById('sim-step'),
+  simBlock:    document.getElementById('sim-block'),
   simOutcome:  document.getElementById('sim-outcome'),
   simHint:     document.getElementById('sim-hint'),
   testBanner:  document.getElementById('test-banner'),
@@ -1574,6 +1724,12 @@ function render() {
  * 무장 경고 없이 데이터를 통제하는 것이 이 버튼의 존재 이유다(§12B.3).
  */
 function renderSim() {
+  /* 🔴 **데모에서만 보인다** (REQ-0301). 실기에서는 장치가 **항상 `result=5`** 로 거절한다 —
+     시뮬 갈래가 `srcReal=0b11` 때문에 도달 불가다(socket 실측 · `docs/net/LEDGER.md` §107).
+     🔑 판별자는 `state.link === 'demo'` 하나다: 데모 전송기가 `handleSimStep` 으로 **실제로 처리**하고
+        그 밖(ws · 폴백 · 미접속)에서는 **아무도 처리하지 못한다.**
+     ⚠ `hidden` 은 `display:none` 이라 초점도 안 잡힌다 — 키보드로도 도달할 수 없다. */
+  if (el.simBlock) el.simBlock.hidden = state.link !== 'demo';
   const deviceDown = !!(state.snapshot && state.snapshot.device.online === false);
   const pending = simPendingCount();
   let reason = '';
@@ -2072,10 +2228,18 @@ async function requestReserve(slotId) {
   if (!ok) return;
 
   // 대화상자를 여는 동안 상태가 바뀌었을 수 있다.
-  const slot = currentSlot(slotId);
-  if (!slot || tileView(slot).action !== 'reserve') {
-    showMessage(afterConfirmBlockedText(slotId, '예약'), 'err');
-    return;
+  /* 🔴 여는 판정자와 **같은 것**으로 재검증한다(REQ-0290). 개정 격자는 서버 `actions` 가 판정자다. */
+  if (mapUsable()) {
+    if (!zoneActionOk(slotId, 'reserve')) {
+      showMessage(afterConfirmBlockedText(slotId, '예약'), 'err');
+      return;
+    }
+  } else {
+    const slot = currentSlot(slotId);
+    if (!slot || tileView(slot).action !== 'reserve') {
+      showMessage(afterConfirmBlockedText(slotId, '예약'), 'err');
+      return;
+    }
   }
   const rid = newRid();
   markPending(rid, slotId, 'reserve');
@@ -2087,8 +2251,15 @@ async function requestCancel(slotId) {
     slotId + ' 자리의 내 예약을 취소합니다.' + staleNote());
   if (!ok) return;
 
-  const slot = currentSlot(slotId);
-  if (!slot || tileView(slot).action !== 'cancel') {
+  /* 🔴 취소도 같은 규칙이다 — 여는 쪽과 보내는 쪽의 판정자가 갈리면 그만큼 "열려 보이는데 안 되는" 창이 생긴다. */
+  if (mapUsable()) {
+    if (!zoneActionOk(slotId, 'cancel')) {
+      showMessage(afterConfirmBlockedText(slotId, '취소'), 'err');
+      return;
+    }
+  }
+  const slot = mapUsable() ? null : currentSlot(slotId);
+  if (!mapUsable() && (!slot || tileView(slot).action !== 'cancel')) {
     // 예약과 같은 이유로 여기도 갈린다 — 내 예약의 취소도 deviceDown 이면 action 이 없어진다
     // (tileView 의 `mine && canAct() && !deviceDown`). 문구가 하나면 여기서도 거짓말을 한다.
     showMessage(afterConfirmBlockedText(slotId, '취소'), 'err');
@@ -2170,6 +2341,13 @@ function simPendingCount() {
 }
 
 el.simStep.addEventListener('click', function () {
+  /* 🔴 **실기에서는 보내지 않는다** (REQ-0301). 버튼은 데모에서만 보이지만, 보이는 동안 링크가
+     바뀔 수 있다(데모 → ws). 그 경합에서 요청이 나가면 **반드시 거절되는 요청**이 전선에 실린다.
+     🔑 화면에서 감추는 것과 **보내지 않는 것**은 다른 문이고, 둘 다 있어야 한다. */
+  if (state.link !== 'demo') {
+    showMessage('시뮬레이션 한 걸음은 데모에서만 동작합니다 — 실기 장치에는 시뮬 갈래가 없어 항상 거절됩니다', 'info');
+    return;
+  }
   if (el.simStep.getAttribute('aria-disabled') === 'true') {
     showMessage(el.simStep.dataset.reason || '지금은 시뮬레이션을 진행할 수 없습니다', 'info');
     return;
@@ -2270,6 +2448,24 @@ function currentSlot(slotId) {
   return state.snapshot.slots.find(function (s) { return s.id === slotId; }) || null;
 }
 
+/**
+ * 🔴 **개정 격자에서 조작의 판정자는 서버의 `zone.actions[act].ok` 다** (REQ-0290 · 사용자 실물 보고).
+ *
+ * 있던 결함: 격자는 `actions` 로 버튼을 열어 주는데 `requestReserve()` 는 확인 뒤에
+ * **옛 격자의 `snapshot.slots`** 로 다시 검증했다(`currentSlot` + `tileView`).
+ * 새 봉투만 오는 지형에서는 그 목록에 **그 자리가 없거나 `snapshot` 자체가 없다** →
+ * `showMessage("그 사이 자리 상태가 바뀌어…")` 하나 띄우고 **전선에 아무것도 안 나갔다.**
+ * 🔑 그래서 서버 로그에 예약 요청이 **0건**이었고, 사용자에게는 *"눌러도 테두리가 안 바뀐다"* 로 보였다.
+ *
+ * ⚠ **이것이 판정자 둘 문제다**(원장 §5.52 의 그 형태). 그때는 *여는 쪽* 을 하나로 모았고
+ * **보내는 쪽은 옛 판정자를 그대로 들고 있었다.** 여는 판정자와 보내는 판정자가 같아야 한다.
+ */
+function zoneActionOk(zoneId, act) {
+  const zs = zoneStateById().get(zoneId);
+  const a = zs && zs.actions && typeof zs.actions === 'object' ? zs.actions[act] : null;
+  return !!(a && a.ok === true);
+}
+
 el.grid.addEventListener('click', function (event) {
   const btn = event.target.closest('.tile');
   if (!btn) return;
@@ -2295,7 +2491,27 @@ el.grid.addEventListener('click', function (event) {
  * ⚠ **개정에서 낱말이 `zone` 으로 갈렸지만 요청 키가 바뀌는지는 계약에 없다.**
  * **확정된 것(`slot`)을 쓰는 것이 짐작하지 않는 쪽**이고, 그래야 **옛 서버와 새 서버가 같은 요청을 받는다.**
  */
+/**
+ * 🔴 **칸 클릭 = 선택** (REQ-0288). 칸에는 조작 버튼이 없다 — 상세와 조작은 우측 패널이 받는다.
+ * 🔑 다시 그리는 것은 `renderZoneGrid()` 하나로 끝난다(격자 + 패널을 같이 그린다).
+ */
 el.zoneGrid.addEventListener('click', function (event) {
+  const cell = event.target.closest('.zone');
+  if (!cell || !cell.dataset.zone) return;
+  if (state.selZone === cell.dataset.zone) return;      /* 같은 자리 재클릭 — 다시 그릴 이유가 없다 */
+  state.selZone = cell.dataset.zone;
+  renderZoneGrid();
+  /* 선택을 누른 칸에 초점이 남게 한다 — 격자를 통째로 다시 만들었으므로 직접 되돌린다. */
+  for (const b of el.zoneGrid.querySelectorAll('.zone')) {
+    if (b.dataset.zone === state.selZone) { b.focus(); break; }
+  }
+});
+
+/**
+ * 자리 조작(예약·취소) — 🔴 **패널에 붙는다.** 버튼이 칸에서 패널로 옮겨 갔다(REQ-0288).
+ * ⚠ 요청 경로·확인 대화상자·낙관적 UI·타이머는 **한 줄도 안 바뀐다.** 붙는 자리만 바뀐 것이다.
+ */
+el.zoneDetail.addEventListener('click', function (event) {
   const btn = event.target.closest('.zbtn');
   if (!btn) return;
   const zoneId = btn.dataset.zone, act = btn.dataset.act;
@@ -2500,6 +2716,19 @@ const ACTION_LABEL = {
  * 🔑 **서버가 번역하지 않는다.** 한글은 **표시 이름**이고 그 사상은 **여기 한 곳에만** 있다 —
  * 두 홉이 아니라 한 홉이다. (번역이 서버에도 있으면 사상이 두 벌이 되고 한쪽만 고치는 날이 온다.)
  */
+/**
+ * 🔴 **자리 비활성 사유** — 계약: `map.zones[].active = {ok, reason}` (REQ-0293 · SPEC-assembly-v2 §5).
+ *
+ * 🔑 **계산 주체는 서버다.** 화면은 `modules.length` 를 세지 않는다 —
+ * 세면 같은 규칙이 두 곳에 생기고, 두 구현이 갈리는 날 어느 쪽이 맞는지 알 수 없다.
+ * ⚠ 이것은 `value_state:"unknown"` 을 **없애는 것이 아니다.** 그 무지에 **이유를 붙이는 것**이다 —
+ *   모듈이 없는 자리의 점유는 여전히 *모르는 것이 맞다.* "비었다"로 바꿔 그리지 않는다.
+ * ⚠ 지금 닫힌 집합은 `no_modules` 하나다. **모르는 코드는 조용히 정상으로 떨어뜨리지 않고 원문을 보인다.**
+ */
+const ZONE_INACTIVE_TEXT = {
+  no_modules: '모듈이 없어 점유를 알 수 없습니다',
+};
+
 const MOD_KIND_LABEL = {
   IP: '주차확인센서', IX: '입출차센서',
   OG: '안내등', OL: '유도등', OB: '차단봉'
@@ -2699,18 +2928,47 @@ function renderZoneGrid() {
   el.zoneGrid.hidden = !on;
   el.grid.hidden = on;
   if (el.gridHead) el.gridHead.hidden = on;
-  if (!on) return;
+  /* 🔴 안내 문구도 **지금 무엇을 그리고 있는지**를 따라간다(REQ-0290). 두 격자가 다른 세계다. */
+  if (el.gridSub) {
+    el.gridSub.textContent = on
+      ? '' /* 아래에서 map 으로 채운다 */
+      : '옛 격자(자리 목록) 를 그리고 있습니다 — 빈자리를 눌러 예약합니다';
+  }
+  if (!on) { renderZoneDetail(null, new Map()); return; }
 
   const m = state.map;
+  /* 🔴 열 수는 **자리의 논리 배치**다(맵 정의). 화면 폭 때문에 바꾸지 않는다 —
+     바꾸면 A1 이 어느 칸에 있는지가 창 크기에 따라 달라진다. 넓은 화면은 `.wrap` 폭으로 받는다(REQ-0289). */
   el.zoneGrid.style.setProperty('--zcols', String(m.cols));
   const byCell = new Map();
+  const overlap = new Map();   /* 칸키 → 가려진 자리 id 들 */
   for (const z of m.zones) {
     const cells = Array.isArray(z.cells) ? z.cells : [];
     /* 🔑 `cells` 를 **순회한다.** 지금은 길이 1이지만 순회하면 N:1 이 와도 이 코드가 안 바뀐다.
        `cells[0]` 을 고르면 그때 **말없이 첫 칸만 그린다**(socket ⑤). */
-    for (const c of cells) if (Array.isArray(c) && c.length >= 2) byCell.set(c[0] + ',' + c[1], z);
+    for (const c of cells) {
+      if (!Array.isArray(c) || c.length < 2) continue;
+      const key = c[0] + ',' + c[1];
+      /* 🔴 **격자 칸이 겹칠 수 있다**(SPEC-assembly-v2 ④). 서버는 **말하고 막지 않는다** —
+         겹침은 표시 문제이고 서버 동작은 멀쩡하기 때문이다.
+         ⚠ **그런데 겹침의 증상이 *가려짐* 이라 조용하다.** 예전 코드는 `set` 으로 덮어써서
+         **나중 자리가 앞 자리를 소리 없이 지웠다** — 기여자는 *"내 자리가 왜 안 보이지"* 를 영영 못 푼다.
+         🔑 그래서 **먼저 온 것을 그리고, 가려진 것을 목록으로 남겨 화면에 보인다.** */
+      if (byCell.has(key)) {
+        if (!overlap.has(key)) overlap.set(key, []);
+        overlap.get(key).push(z.id);
+      } else byCell.set(key, z);
+    }
   }
   const st = zoneStateById();
+
+  /* 🔴 **선택 해소** (REQ-0288). 선택이 없거나 그 자리가 지형에서 사라졌으면 **첫 자리**로 떨어진다.
+     ⚠ 패널을 빈 채로 두지 않는다 — 사용자가 *"조작이 어디 갔지"* 를 먼저 겪는다.
+     🔑 사라진 자리를 계속 보여 주는 것은 더 나쁘다(없는 것을 있다고 그리는 것이다). */
+  const zoneIds = m.zones.map(function (z) { return z.id; });
+  if (!state.selZone || zoneIds.indexOf(state.selZone) < 0) {
+    state.selZone = zoneIds.length ? zoneIds[0] : null;
+  }
 
   /* 🔴 **포커스를 보존한다.** 이 함수는 격자를 **통째로 다시 만든다**(바로 아래 `textContent = ''`).
      그래서 다시 그릴 때마다 **포커스가 사용자 발밑에서 사라진다** — `state` 가 초당 한 장 오므로
@@ -2721,8 +2979,13 @@ function renderZoneGrid() {
      버튼이 파괴되면 읽던 중에 초점이 몸통으로 떨어진다. **누른 직후가 정확히 그 순간이다.**
      ⚠ 격자 안에 포커스가 있었을 때만 되돌린다 — 아니면 남의 포커스를 훔친다. */
   const af = document.activeElement;
-  const keep = (af && af.classList && af.classList.contains('zbtn') && el.zoneGrid.contains(af))
+  /* 🔴 조작 버튼은 이제 **패널**에 있다(REQ-0288). 격자에서 찾으면 영원히 못 찾는다. */
+  const keep = (af && af.classList && af.classList.contains('zbtn') && el.zoneDetail && el.zoneDetail.contains(af))
     ? { zone: af.dataset.zone, act: af.dataset.act } : null;
+  /* 🔴 그리고 **칸 자체가 버튼이 됐다** — 다시 그리면 초점이 몸통으로 떨어진다.
+     격자는 초당 한 번 이상 다시 그려지므로 이게 없으면 **키보드로 격자를 훑을 수 없다.** */
+  const keepCell = (af && af.classList && af.classList.contains('zone') && el.zoneGrid.contains(af))
+    ? af.dataset.zone : null;
 
   /* 🔴🔴 **입력 칸은 사용자 소유다. 서버 값으로 절대 덮지 않는다.** (사용자 실측 2026-08-20)
      증상: *"LC 에 타임사이클이 같이 돈다. 입력을 하는 중간에 글자가 없어진다."*
@@ -2735,7 +2998,9 @@ function renderZoneGrid() {
         `requested`/`value` 는 **옆 상태 줄**에 따로 보인다(그게 화면이 서버를 말하는 자리다). */
   const typed = new Map();
   let caret = null;
-  for (const inp of el.zoneGrid.querySelectorAll('.zctl__num')) {
+  /* 🔴 입력 칸도 **패널**로 옮겨 갔다(REQ-0288). 걷는 곳을 안 바꾸면 보존이 조용히 죽고
+     *"치는 중에 글자가 사라진다"* 가 그대로 되살아난다 — 오늘 고친 그 결함이다. */
+  for (const inp of el.zoneDetail.querySelectorAll('.zctl__num')) {
     const k = inp.dataset.modKey + '|' + inp.dataset.role;
     if (inp.value !== '') typed.set(k, inp.value);
     if (inp === af) {
@@ -2772,6 +3037,11 @@ function renderZoneGrid() {
         continue;
       }
       if (z) {
+        const hidden = overlap.get(r + ',' + c);
+        if (hidden && hidden.length) {
+          /* 🔴 가려진 자리가 있다는 것을 **이 칸에서 말한다.** 조용히 덮지 않는다. */
+          li.dataset.overlap = hidden.join(',');
+        }
         const run = runOf(z, r, c);
         /* 같은 행에서 그 자리의 **모든** 칸이 연속일 때만 `span` 으로 늘린다.
            일부만 연속이면 늘리지 않고 나머지는 위의 "이어짐"이 받는다. */
@@ -2795,14 +3065,25 @@ function renderZoneGrid() {
      아무것도 하지 않는다 — 엉뚱한 버튼으로 옮기면 **다음 엔터가 다른 것을 누른다.**
      ⚠ `querySelector` 에 자리 id 를 문자열로 끼우지 않는다(id 에 따옴표·괄호가 오면 깨진다).
         dataset 을 직접 비교하는 것이 형식에 안 흔들린다. */
+  /* 🔴 **패널을 여기서 그린다** — 격자를 다 만든 뒤, 초점·입력값을 되돌리기 전에.
+     순서가 뒤집히면 되돌려 놓은 값을 패널이 다시 지운다. */
+  renderZoneDetail(m, st);
+
+  /* 칸 초점 되돌리기 — 없어진 자리면 아무것도 하지 않는다(엉뚱한 칸으로 옮기면 다음 엔터가 남을 누른다). */
+  if (keepCell) {
+    for (const b of el.zoneGrid.querySelectorAll('.zone')) {
+      if (b.dataset.zone === keepCell) { b.focus(); break; }
+    }
+  }
+
   if (keep) {
-    for (const b of el.zoneGrid.querySelectorAll('.zbtn')) {
+    for (const b of el.zoneDetail.querySelectorAll('.zbtn')) {
       if (b.dataset.zone === keep.zone && b.dataset.act === keep.act) { b.focus(); break; }
     }
   }
 
   /* 🔴 **치던 값을 되돌린다** — 위에서 안고 온 것. 이것이 없으면 초당 한 번 글자가 사라진다. */
-  for (const inp of el.zoneGrid.querySelectorAll('.zctl__num')) {
+  for (const inp of el.zoneDetail.querySelectorAll('.zctl__num')) {
     const k = inp.dataset.modKey + '|' + inp.dataset.role;
     if (typed.has(k)) inp.value = typed.get(k);
     if (caret && caret.key === k) {
@@ -2811,6 +3092,14 @@ function renderZoneGrid() {
          `setSelectionRange` 를 던진다 — 그때 값까지 잃으면 안 되므로 조용히 포기한다. */
       try { if (caret.start !== null) inp.setSelectionRange(caret.start, caret.end); } catch (e) {}
     }
+  }
+  /* 🔴 지형을 **값으로** 말한다. 자리 수·주차 자리 수·조작 방법 — 정적 문구는 반드시 낡는다. */
+  if (el.gridSub) {
+    const nPark = m.zones.filter(function (z) { return z.kind === 'parking'; }).length;
+    const nArea = m.zones.length - nPark;
+    el.gridSub.textContent = m.rows + '행 × ' + m.cols + '열 · 자리 ' + m.zones.length + '개'
+      + ' (주차 ' + nPark + (nArea ? ' · 일반 영역 ' + nArea : '') + ')'
+      + ' · 칸을 누르면 오른쪽 “선택한 자리”에 상세와 조작이 열립니다';
   }
   renderZoneBanner(m, st);
 }
@@ -2846,12 +3135,11 @@ function renderZoneBanner(m, st) {
   box.hidden = false;
 }
 
-function renderZone(li, z, zs) {
-  li.className = 'zone';
-  li.dataset.zone = z.id;
-  li.dataset.kind = z.kind || '';
-  li.dataset.usable = zs ? '1' : '0';
-
+/**
+ * 자리 머리글 — 🔴 **칸과 패널이 같은 함수를 쓴다.** 두 벌로 쓰면 그때부터 서로 다르게 낡는다.
+ * `opts.badge` 가 숫자면 **모듈 수 배지**를 붙인다(칸에서만 쓴다 — 패널은 목록이 바로 아래 있다).
+ */
+function zoneHeadEl(z, zs, opts) {
   const head = document.createElement('div');
   head.className = 'zone__head';
   /* 🔴 **표시 이름이 앞, `id` 가 뒤**(REQ-0269). `id` 를 **감추지 않는다** —
@@ -2875,7 +3163,188 @@ function renderZone(li, z, zs) {
   sum.className = 'zone__sum';
   sum.textContent = zoneSummary(z, zs);
   head.appendChild(idEl); head.appendChild(sum);
-  li.appendChild(head);
+  if (opts && typeof opts.badge === 'number') {
+    /* 🔴 **수만 말한다.** 목록은 패널의 몫이다. `0` 도 적는다 — 빈 자리가 조용하면 안 된다. */
+    const badge = document.createElement('span');
+    badge.className = 'zone__badge';
+    badge.dataset.empty = opts.badge === 0 ? '1' : '0';
+    badge.textContent = '모듈 ' + opts.badge;
+    badge.title = opts.badge === 0
+      ? '이 자리에 붙은 모듈이 없습니다 (등록 전이거나 결속이 끊겼습니다)'
+      : '이 자리에 모듈 ' + opts.badge + '개 — 목록과 조작은 오른쪽 "선택한 자리" 에 있습니다';
+    head.appendChild(badge);
+  }
+  return head;
+}
+
+/**
+ * 상태색 — 🔴 **색만으로 뜻을 나르지 않는다.** 요약 문구가 이미 뜻을 말하고 색은 거드는 것이다.
+ * 🔑 옛 격자(`.tile`)의 어휘·변수를 그대로 쓴다. 새 이름을 만들면 범례가 두 벌이 된다.
+ * ⚠ `parking` 이 아닌 자리는 **예약 어휘가 없다** — 색을 칠하지 않고 기본 상자로 둔다.
+ */
+function zoneView(z, zs) {
+  if (!zs) return 'unknown';
+  /* 🔴 **비활성 자리는 회색이다** (REQ-0296 · 사용자 지시). 초록(빈 자리)으로 칠하지 않는 것은 그대로다 —
+     모듈이 없으면 점유는 `occupied:false` 로 와도 **모르는 것이 맞다.** 초록은 "비었다"는 주장이다.
+     ⚠ ~~`unknown` 을 돌려주던 것~~ 을 바꿨다: `unknown`(모듈은 있고 값이 안 옴)과 **색이 갈려야 한다.**
+     같은 색이면 *"값을 기다리는 자리"* 와 *"영원히 값이 없는 자리"* 가 구분되지 않는다. */
+  if (z.active && z.active.ok === false) return 'inactive';
+  if (z.kind !== 'parking') return '';
+  if (zs.occupied && zs.reserved) return 'done';
+  if (zs.occupied) return 'occupied';
+  if (zs.reserved) return 'reserved';
+  return 'free';
+}
+
+/**
+ * 🔴 **격자 칸은 요약만 그린다** (REQ-0288 ③안 · 사용자 확정).
+ * 상태색 + 이름/id + 요약 + **모듈 수 배지**. 그것으로 끝이다.
+ *
+ * ⚠ 왜 목록과 조작을 뺐나 — **칸 크기가 내용에 딸리면 그것은 도면이 아니다.**
+ * grid 는 행 높이를 그 행의 최대 칸에 맞추므로 **모듈 많은 자리 하나가 행 전체를 늘렸다.**
+ * 자리마다 모듈 수가 다를 수밖에 없으니 **구조적으로 재발한다.** 사용자가 실물에서 관측했다.
+ * 🔑 그리고 `.zone__acts` 는 `flex-wrap` 이라 **버튼이 줄바꿈되며 칸을 밀어 올렸다** — 그 축도 같이 사라진다.
+ *
+ * 🔴 칸은 **`<button>`** 이다. `div` 로 버튼을 만들지 않는다 — 초점·엔터·스페이스·역할이 공짜로 온다.
+ */
+function renderZone(li, z, zs) {
+  li.className = 'zcell';
+  li.dataset.zone = z.id;                 /* 🔑 칸에서도 자리를 찾을 수 있게 둔다(하니스·디버깅) */
+
+  const box = document.createElement('button');
+  box.type = 'button';
+  box.className = 'zone';
+  box.dataset.zone = z.id;
+  box.dataset.kind = z.kind || '';
+  box.dataset.usable = zs ? '1' : '0';
+  const view = zoneView(z, zs);
+  if (view) box.dataset.view = view;
+  /* 🔴 **비활성 자리** (REQ-0293). `active` 키가 **없으면 아무 주장도 하지 않는다**(존재/부재 규칙) —
+     옛 서버에는 이 키가 없고, 없는 것을 "활성"이나 "비활성"으로 단정하면 그게 지어내는 것이다. */
+  const inactive = !!(z.active && z.active.ok === false);
+  if (inactive) box.dataset.active = '0';
+  const nMods = Array.isArray(z.modules) ? z.modules.length : 0;
+  const selected = state.selZone === z.id;
+  if (selected) box.setAttribute('aria-current', 'true');
+
+  /* 🔴 **칸에서 빼는 것은 "중복"뿐이다** (REQ-0297 정본 · 사용자가 값으로 짚었다):
+       *"**1번자리  a1  빈자리** << 3개가 동일하다."*
+
+     ```
+     `1번 자리`  label      ✅ 남긴다 — 이 칸이 무엇인지 말하는 이름
+     `A1`        자리 id    ❌ label 이 있으면 **같은 것을 두 번** 말한다
+     `빈 자리`   상태 문구  ❌ **색·테두리가 이미 말한다** → 사용자 눈에는 세 번째 이름이었다
+     ```
+     ✅ **모듈 배지 · 비활성 `⏸` 사유 · 색 · 점선 · 사선은 남긴다** — 사용자가 지우지 말라고 명시했다.
+        (그 둘은 이름이 아니라 **다른 사실**이다. 중복이 아니므로 빼는 대상이 아니다.)
+     🔴 라벨이 없으면 **id 로 떨어진다** — 그때 id 는 중복이 아니라 그 칸의 유일한 이름이다(A2~A5).
+
+     ⚠ 화면에서 빼는 것과 **기계에서** 빼는 것은 다르다: 상태·사유는 `aria-label`·`title` 에 문장으로 남는다.
+        스크린리더는 색을 못 읽는다.
+     ⚠ ~~`▸ 오른쪽에 상세`~~ 선택 표시 글자도 뺐다 — 그것도 네 번째 라벨이 된다.
+        선택은 **테두리 링(모양)** + `aria-current`(기계)로 말한다. 색 하나에만 기대지 않는다. */
+  const cellHead = document.createElement('div');
+  cellHead.className = 'zone__head';
+  const cellName = document.createElement('span');
+  cellName.className = 'zone__name';
+  if (zoneHasLabel(z)) {
+    cellName.textContent = zoneLabel(z);
+  } else {
+    cellName.textContent = z.id;
+    cellName.dataset.fallback = 'id';
+  }
+  cellHead.appendChild(cellName);
+
+  /* 모듈 수 배지 — **이름이 아니라 다른 사실**이라 남긴다(사용자 명시). `0` 도 적는다. */
+  const badge = document.createElement('span');
+  badge.className = 'zone__badge';
+  badge.dataset.empty = nMods === 0 ? '1' : '0';
+  badge.textContent = '모듈 ' + nMods;
+  badge.title = nMods === 0
+    ? '이 자리에 붙은 모듈이 없습니다'
+    : '이 자리에 모듈 ' + nMods + '개 — 목록과 조작은 오른쪽 “선택한 자리”에 있습니다';
+  cellHead.appendChild(badge);
+  box.appendChild(cellHead);
+
+  /* 🔴 비활성 사유 — **남긴다**(루트가 앞서 "그대로 둬라"고 한 것이 맞았다).
+     상태 문구와 다르다: `빈 자리` 는 색이 이미 말하지만 **"왜 못 쓰는지"는 색이 말할 수 없다.** */
+  if (inactive) {
+    const why = document.createElement('span');
+    why.className = 'zone__inactive';
+    const code = z.active.reason;
+    why.textContent = '⏸ ' + (ZONE_INACTIVE_TEXT[code] || ('사용할 수 없습니다 (' + String(code) + ')'));
+    box.appendChild(why);
+  }
+
+  /* 🔴 **가려진 자리를 이 칸에서 말한다**(SPEC-assembly-v2 ④ · REQ-0284). `dataset.overlap` 은
+     `renderZoneGrid` 가 칸을 만들 때 채운다. **없으면 이 줄이 아예 없다**(존재/부재).
+     ⚠ 이것은 **중복 라벨이 아니다** — 겹침의 증상이 *가려짐* 이라 조용하고, 화면이 안 말하면
+     기여자는 *"내 자리가 왜 안 보이지"* 를 영영 못 푼다. REQ-0297 로 뺄 대상이 아니다.
+     🔴 (실수로 한 번 지웠다가 하니스가 잡아 되살렸다 — 그 검사가 있어서 살았다.) */
+  if (li.dataset.overlap) {
+    const ov = document.createElement('div');
+    ov.className = 'zone__overlap';
+    ov.textContent = '⚠ 이 칸에 자리가 겹칩니다 — 가려진 자리: ' + li.dataset.overlap;
+    ov.title = '지형 선언에서 같은 칸을 두 자리가 쓰고 있습니다. 서버는 막지 않습니다(표시 문제). '
+             + 'lot.spot(...).at(행,열) 을 확인하세요.';
+    box.appendChild(ov);
+  }
+
+  /* 🔴 칸에서 글자를 뺐으므로 **여기가 그 정보의 유일한 남은 자리**다. 문장으로 적는다
+     (§7.2: 좁은 곳은 기호, 넓은 곳은 문장). `title` 에도 같이 넣는다 — 마우스 사용자의 몫이다. */
+  const desc = (zoneHasLabel(z) ? zoneLabel(z) + ' (' + z.id + ')' : z.id)
+    + (inactive ? ' — 사용할 수 없는 자리: '
+        + (ZONE_INACTIVE_TEXT[z.active.reason] || String(z.active.reason)) : '')
+    + ' — ' + (zoneSummary(z, zs) || '상태 표시 없음')
+    + ' · 모듈 ' + nMods + '개';
+  box.setAttribute('aria-label', desc
+    + (selected ? ' · 지금 선택된 자리입니다' : ' · 눌러서 상세와 조작을 봅니다'));
+  box.title = desc + '\n눌러서 오른쪽 “선택한 자리”에 모듈 목록과 조작을 띄웁니다';
+  li.appendChild(box);
+  return li;
+}
+
+/**
+ * 🔴 **선택한 자리의 상세** — 우측 패널 (REQ-0288 ③안).
+ * 여기 오는 것: 노드 박스 > 모듈 행 > `control` 위젯 · 그리고 자리 조작 버튼.
+ * 🔑 **칸에 있던 코드를 그대로 옮겼다.** 새로 쓰지 않았다 — 새로 쓰면 두 벌이 되고 따로 낡는다.
+ *
+ * ⚠ 선택된 자리가 지형에서 사라지면(`epoch` 교체·기여자 편집) `renderZoneGrid` 가 첫 자리로 되돌린다.
+ *   여기서 "없다"를 그리지 않는 이유다 — **없는 자리를 계속 보여 주는 것이 더 나쁘다.**
+ */
+function renderZoneDetail(m, st) {
+  const wrap = el.zoneDetail;
+  if (!wrap) return;
+  wrap.textContent = '';
+  const zones = (m && Array.isArray(m.zones)) ? m.zones : [];
+  const z = zones.find(function (x) { return x && x.id === state.selZone; }) || null;
+  if (!z) {
+    const none = document.createElement('p');
+    none.className = 'zpanel__empty';
+    none.textContent = zones.length
+      ? '왼쪽 격자에서 자리를 누르면 모듈과 조작이 여기 나옵니다.'
+      : '지형(map)이 아직 오지 않았습니다.';
+    wrap.appendChild(none);
+    return;
+  }
+  const zs = st.get(z.id) || null;
+
+  /* 🔴 칸에서 뺀 **모듈 수 배지**가 여기로 온다(REQ-0297). 요약·날 id 는 `zoneHeadEl` 이 이미 그린다. */
+  const head = zoneHeadEl(z, zs, { badge: Array.isArray(z.modules) ? z.modules.length : 0 });
+  head.classList.add('zpanel__head');
+  wrap.appendChild(head);
+
+  /* 🔴 비활성이면 **여기서 먼저 말한다** (REQ-0293). 칸은 좁아서 한 줄이고, 사람이 이유를 읽는 자리는 여기다.
+     ⚠ 그리고 이 문구가 없으면 아래 "가능한 조작이 없습니다" 만 남아 **원인이 자리가 아니라 서버로 읽힌다.** */
+  if (z.active && z.active.ok === false) {
+    const why = document.createElement('p');
+    why.className = 'zpanel__empty';
+    const code = z.active.reason;
+    why.textContent = '⏸ 사용할 수 없는 자리입니다 — '
+      + (ZONE_INACTIVE_TEXT[code] || ('사유 코드 ' + String(code)))
+      + '. 점유는 여전히 “모름”입니다(빈 자리라는 뜻이 아닙니다).';
+    wrap.appendChild(why);
+  }
 
   /* 🔴 **박스 안의 박스** — 영역 박스 > **노드 박스** > 모듈 리스트 (사용자 지시 · REQ-0261).
      묶는 키는 **`devid`** 다. 한 영역에 여러 노드의 모듈이 들어올 수 있다
@@ -2946,7 +3415,7 @@ function renderZone(li, z, zs) {
     box.appendChild(ul);
     nodes.appendChild(box);
   }
-  li.appendChild(nodes);
+  wrap.appendChild(nodes);
 
   const acts = document.createElement('div');
   acts.className = 'zone__acts';
@@ -3002,13 +3471,28 @@ function renderZone(li, z, zs) {
     }
     acts.appendChild(b);
   }
-  if (acts.childNodes.length) li.appendChild(acts);
-  return li;
+  if (acts.childNodes.length) wrap.appendChild(acts);
+  else {
+    /* 🔴 **조작이 없는 것을 조용히 두지 않는다** (REQ-0290 · 루트 지시: *"눌러도 안 되는 것이면 그렇게 보이게"*).
+       ⚠ 그리고 **원인을 지어내지 않는다.** 화면이 아는 것은 두 가지뿐이다:
+         · 이 자리가 `parking` 인가 (v2 에서 예약은 주차 자리에만 성립한다)
+         · 서버가 `actions` 를 줬는가 (없으면 *"지금 이 자리에 그 조작이 없다"* 는 뜻이다 — socket 확정) */
+    const none = document.createElement('p');
+    none.className = 'zpanel__empty';
+    none.textContent = (z.kind === 'parking')
+      ? '지금 이 자리에 가능한 조작이 없습니다 — 서버가 이 자리의 조작을 내려보내지 않았습니다'
+      : '일반 영역입니다 — 예약은 주차 자리에만 있습니다 (모듈 조작은 위 목록에서 합니다)';
+    wrap.appendChild(none);
+  }
 }
 
 /** 1행 요약. 🔴 `kind` 로 먼저 가른다 — **입구에 "예약됨"이 없다**(설계서 §4.1). */
 function zoneSummary(z, zs) {
   if (!zs) return '상태 미상';
+  /* 🔴 같은 이유로 **요약도 "빈 자리"라고 말하지 않는다** (REQ-0293).
+     socket 조건 그대로다: *"`occupied:false` 를 '비었다'로 바꿔 그리지 마라 — 여전히 '모른다'이다."*
+     🔑 사유는 바로 아래 `⏸` 줄이 말한다. 여기서는 **주장을 안 하는 것**이 할 일이다. */
+  if (z.active && z.active.ok === false) return '점유 모름';
   if (z.kind === 'parking') {
     if (zs.occupied && zs.reserved) return '예약한 자리에 입차';
     if (zs.occupied) return '사용 중';
@@ -3032,9 +3516,19 @@ function zoneSummary(z, zs) {
   if (c === 'pending')  return '명령을 보냈습니다 — 장치 보고를 기다리는 중';
   if (c === 'settled')  return '장치가 요청대로 보고합니다';
   if (c === 'mismatch') return '⚠ 장치가 요청과 다르게 보고합니다';
-  /* `unknown` = **이 세션에 명령한 적이 없거나 비트를 못 읽었다** → 아무 주장도 하지 않는다.
-     자리 이름만 보이는 것이 맞다(없는 사실을 만들지 않는다). */
-  if (c === 'unknown' || c === undefined || c === null) return (z.kind === 'exit' ? '출구' : '입구');
+  /* 🔴 `unknown`·키 없음 → **아무것도 안 쓴다**(빈 문자열). socket 실측(2026-08-20):
+     게이트 내장 조작을 없앤 뒤로 **`gate_want` 에 값을 쓰는 곳이 하나도 없다** →
+     자리의 `completion` 은 `pending` 아니면 `unknown` 만 나오고 **`settled`·`mismatch` 는 도달 불가**다.
+     > **내가 본 `unknown` 은 "모른다"가 아니라 "이 필드는 이제 아무것도 안 센다" 였다.**
+
+     ~~`zoneLabel(z)`~~ 도 안 쓴다 — **머리글이 이미 그 이름을 보이고 있어서 같은 글자가 두 번** 나온다.
+     ~~`z.kind === 'exit' ? '출구' : '입구'`~~ 는 그 전 판이다(**종류로 이름을 지으면 기여자가
+     `label("하역장")` 이라 적어도 화면이 "입구"라고 우긴다**).
+
+     🔑 애초에 **자리 단위로 답할 수 없는 물음**이었다 — 자리엔 모듈이 여럿인데 `completion` 은 하나다.
+     ⏳ v2 에서 `zone.completion` 이 봉투에서 빠진다. 그때 자리 요약이 필요하면
+        **모듈들의 `confirmed`** 로 만든다(socket 명세 §5 ⑤). **지금은 비우는 것이 맞다.** */
+  if (c === 'unknown' || c === undefined || c === null) return '';
   /* 🔴 모르는 값 — 계약이 늘어난 것이다. **조용히 정상으로 그리지 않고 원문을 보인다.** */
   return '⚠ 알 수 없는 상태 (' + String(c) + ')';
 }

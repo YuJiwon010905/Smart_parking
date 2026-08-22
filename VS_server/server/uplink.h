@@ -273,9 +273,49 @@
             //     **둘 다 이 줄보다 위에 있다.** 아래 둘은 하행을 만들지 않는다 —
             //     그래서 순서를 바꿔도 §8.21 이 실측한 "갈린 구간 ≈1초"가 안 늘어난다.
             //   🔑 **화면이 스냅샷을 몇 ms 늦게 받는 것은 아무것도 안 깨뜨린다. 장치는 다르다.**
+            // 🔴 **flush 보다 먼저 부른다.** 콜백이 낸 명령이 **이 창에 같이 나가야** 한다 —
+            //   뒤에 두면 다음 창(1.2초 뒤)으로 밀린다.
+            //   ⚠ 이 자리는 이미 하행을 만드는 곳이다(`resync_reservations` · 치유 `dispatch('C')`
+            //     가 위에 있다). 그래서 새 종류의 위험이 아니다.
+            notify_occupancy_changes();
             flush_downq("S 도착 — 창 시작", false);
             write_log_if_changed();
             push_snapshot();
+        }
+        // ── §V 센서 값 프레임 `V,<v1>,…,<vk>,<ck>` ─────────────────────────────
+        // 🔴 **위치가 뜻을 정한다** — 항목 i 는 **모듈 idx i** 다(`occ` 비트와 같은 주소 체계).
+        //   각 항목은 hex **3자리** 또는 🔴 **빈 칸(= 못 쟀다)**.
+        // ⚠ **빈 칸을 `0` 으로 읽지 마라.** `0` 은 "0cm" 이고 빈 칸은 **"못 쟀다"** 다 —
+        //   그 둘을 접으면 반사 실패가 조용히 "아주 가깝다" 가 된다.
+        // 🔑 **항목 수를 강제하지 않는다.** 장치 판마다 자리 수가 다를 수 있어(실측: 2칸 판과
+        //   11칸 판이 같은 로그에 있었다) **모듈 수까지만 읽고 나머지는 버린다.**
+        //   너무 적으면 **없는 것으로 둔다** — 조용히 밀려 엉뚱한 모듈에 붙는 것보다 낫다.
+        else if (f[0] == "V") {
+            Node& vn = n;
+            const size_t have = vn.mods.size();
+            size_t used = 0, miss = 0;
+            for (size_t i = 1; i < f.size(); i++) {
+                const size_t idx = i - 1;
+                if (idx >= have || idx >= (size_t)REG_MODS_MAX) break;
+                if (f[i].empty()) {                 // 🔴 못 쟀다 — 값을 지우고 그렇게 기록한다
+                    vn.mod_val_has[idx] = false; miss++;
+                    continue;
+                }
+                char* endp = 0;
+                const long v = strtol(f[i].c_str(), &endp, 16);
+                if (endp == f[i].c_str() || (endp && *endp)) { vmalformed++; continue; }
+                vn.mod_val[idx] = v; vn.mod_val_has[idx] = true; vn.mod_val_ms[idx] = now_ms();
+                used++;
+                // 🔴 **값이 올 때마다 부른다** — 점유가 안 바뀌어도 온다(주차 유도).
+                //   🔑 여기는 `S` 처리보다 **앞**이다(`V` 가 같은 배치에서 먼저 온다) →
+                //     값 콜백이 점유 콜백보다 먼저 불린다. **저장해 뒀다 쓰는 것이 가능하다.**
+                //   ⚠ 자리에 안 붙은 모듈은 부르지 않는다 — 화면에도 없는 것에 콜백만 가면 헷갈린다.
+                if (val_cb_ && owner_ && idx < vn.mods.size()) {
+                    const std::string zid = lot.zoneOfModule(vn.devid, vn.mods[idx].first, lot_);
+                    if (!zid.empty()) val_cb_(*owner_, zid, vn.mods[idx].first, v);
+                }
+            }
+            vframes++; vvalues += (long long)used; vmissing += (long long)miss;
         }
         // ── §5 등록 프레임 `D` ─────────────────────────────────────────────────
         // 🔴 **관측이지 제어가 아니다**(Node::reg_* 주석). 하행 경로를 안 바꾼다.

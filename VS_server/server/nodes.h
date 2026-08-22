@@ -384,6 +384,125 @@
 
     // 🔑 이 자리의 판정 방식. 조립 표가 안 정했으면 **서버 기본(OR)**.
     //   ⚠ 자리 id 로 찾는다 — 지형 `Zone` 과 조립 표 `Area` 가 같은 id 를 쓴다.
+    // 🔴🔴 **자리의 센서 값을 모으는 유일한 곳.**
+    //   화면 봉투(`state_json`)와 점유 변화 콜백이 **같은 함수**를 쓴다 —
+    //   두 곳에서 따로 세면 판정자가 둘이 되고, 갈리는 순간 어느 쪽이 맞는지 알 수 없다.
+    //
+    // 🔑 **`I` 로 시작하는 모듈만 든다.** 명령 모듈(`O…`)의 **에코 비트는 점유가 아니다.**
+    //   ⚠ 이것이 변화 콜백이 **자기 명령으로 재귀하지 않는 근거다** —
+    //     콜백이 `LD`(OG)를 켜면 그 에코 비트가 오르지만 **여기 안 들어오므로 점유가 안 움직인다.**
+    //     근거를 주석이 아니라 시험으로도 박아 뒀다(음성 대조).
+    // 이름을 같이 준다. **순서는 선언 순서**(`z.modules`) — 재현 가능해야 한다.
+    void zone_sensors(const Zone& z,
+                      std::vector<std::pair<std::string, SensorReading> >& out) const {
+        for (size_t m = 0; m < z.modules.size(); m++) {
+            const Node* mn = node_by_devid(z.modules[m].first);
+            int mi = -1;
+            if (mn)
+                for (size_t k = 0; k < mn->mods.size(); k++)
+                    if (mn->mods[k].first == z.modules[m].second) { mi = (int)k; break; }
+            if (mi < 0) continue;
+            if (!mn || mn->mods[mi].second.empty() || mn->mods[mi].second[0] != 'I') continue;
+            const bool known = (mi < mn->mod_bits_n);
+            const bool val   = known && mn->mod_bits[mi];
+            out.push_back(std::make_pair(z.modules[m].second, SensorReading(known, val)));
+        }
+    }
+
+    void zone_readings(const Zone& z, std::vector<SensorReading>& out,
+                       int& v_known, int& v_total, int& v_ones) const {
+        v_known = v_total = v_ones = 0;
+        for (size_t m = 0; m < z.modules.size(); m++) {
+            const Node* mn = node_by_devid(z.modules[m].first);
+            int mi = -1;
+            if (mn)
+                for (size_t k = 0; k < mn->mods.size(); k++)
+                    if (mn->mods[k].first == z.modules[m].second) { mi = (int)k; break; }
+            if (mi < 0) continue;
+            if (!mn || mn->mods[mi].second.empty() || mn->mods[mi].second[0] != 'I') continue;
+            v_total++;
+            const bool known = (mi < mn->mod_bits_n);
+            const bool val   = known && mn->mod_bits[mi];
+            out.push_back(SensorReading(known, val));
+            if (known) { v_known++; if (val) v_ones++; }
+        }
+    }
+
+    // 🔴 그 모듈이 **마지막으로 잰 값**. 없으면 `has=false` — **`0` 으로 접지 않는다.**
+    SensorMeasure measure_of(const std::string& devid, const std::string& name) const {
+        const Node* n = node_by_devid(devid);
+        if (!n) return SensorMeasure();
+        for (size_t k = 0; k < n->mods.size(); k++)
+            if (n->mods[k].first == name) {
+                if (k >= (size_t)REG_MODS_MAX || !n->mod_val_has[k]) return SensorMeasure();
+                return SensorMeasure(true, n->mod_val[k]);
+            }
+        return SensorMeasure();
+    }
+
+    // 자리가 **지금** 찼는가. 판단은 그 자리의 `SpotBehavior` 가 한다.
+    bool zone_occupied_now(const Zone& z) const {
+        std::vector<SensorReading> r; int k = 0, t = 0, o = 0;
+        zone_readings(z, r, k, t, o);
+        return behavior_for(z.id).occupied(r);
+    }
+
+    // 🔴 **점유 변화를 판정하고 기여자 콜백을 부른다.**
+    //
+    //   ⚠ **이 판정은 전에 없었다.** 자리 점유는 `state_json()` 이 직렬화할 때마다 새로 계산했고
+    //     직전 값과 대조하는 코드가 어디에도 없었다(`write_log_if_changed()` 는 **옛 10칸
+    //     `slots[]`** 를 본다 — 새 지형 자리와 다른 것을 센다). 그래서 여기서 처음 만든다.
+    //   🔑 대신 **계산 자체는 새로 만들지 않았다** — `zone_readings()` 하나를 화면과 같이 쓴다.
+    //
+    // 🔴 부르는 자리는 `S` 프레임 처리 안, **하행 flush 보다 먼저**다.
+    //   콜백이 낸 명령이 **그 창에 같이 나가야** 반응이 한 슬롯 빨라진다.
+    //   ⚠ 뒤에 두면 `flush_downq` 를 이미 지나서 **다음 창(1.2초 뒤)** 으로 밀린다.
+    void notify_occupancy_changes() {
+        for (size_t i = 0; i < lot.zones().size(); i++) {
+            const Zone& z = lot.zones()[i];
+            // CODEX FIX: entrance/exit are sensor-bearing general areas.
+            // Report every I* module to the server controller; only parking
+            // aggregation remains restricted to parking zones elsewhere.
+            // 🔴 **모듈 단위다.** 자리 하나로 합치지 않는다 — 합칠지는 기여자가 정한다.
+            //   ⚠ 순서는 **선언 순서**(`zone_sensors` 가 그렇게 준다). 재현 가능해야 한다.
+            std::vector<std::pair<std::string, SensorReading> > ms;
+            zone_sensors(z, ms);
+            for (size_t m = 0; m < ms.size(); m++) {
+                // 🔑 **값을 아직 못 받은 모듈은 판정하지 않는다.** `known=false` 를 `false` 로
+                //   읽으면 "비었다"가 되고, 그건 모름을 거짓으로 무너뜨리는 것이다.
+                if (!ms[m].second.known) continue;
+                const std::string key = z.id + "\t" + ms[m].first;
+                const bool now = ms[m].second.value;
+                std::map<std::string, bool>::iterator it = occ_prev_.find(key);
+                bool first = (it == occ_prev_.end());
+                if (first) {
+                    // CODEX FIX: the controller needs an initial snapshot before
+                    // it can safely choose a free slot. Publish the first known
+                    // value instead of waiting for an edge that may never occur.
+                    occ_prev_[key] = now;
+                    it = occ_prev_.find(key);
+                } else {
+                    if (it->second == now) { occ_fall_n_[key] = 0; continue; }
+                    // 하강(찼다→비었다)만 한 프레임 더 확인한다.
+                    if (!now && ++occ_fall_n_[key] < 2) continue;
+                    occ_fall_n_[key] = 0;
+                    it->second = now;
+                }
+                occ_change_n_++;                      // 🔑 콜백을 등록 안 해도 센다
+                logf("=", std::string(first ? "센서 초기값 " : "센서 변화 ")
+                          + z.id + " · 모듈 " + ms[m].first
+                          + (now ? " = 감지" : " = 미감지"));
+                if (occ_cb_ && owner_) {
+                    // 🔑 같은 이름이 여러 devid 에 있을 수 있으므로 **자리의 선언에서** 짝을 찾는다
+                    std::string dv;
+                    for (size_t q = 0; q < z.modules.size(); q++)
+                        if (z.modules[q].second == ms[m].first) { dv = z.modules[q].first; break; }
+                    occ_cb_(*owner_, z.id, ms[m].first, now, measure_of(dv, ms[m].first));
+                }
+            }
+        }
+    }
+
     const SpotBehavior& behavior_for(const std::string& zoneId) const {
         if (lot_) {
             const std::vector<ParkingLot::Area>& as = lot_->areas();
@@ -668,4 +787,5 @@
         setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
 #endif
     }
+
 

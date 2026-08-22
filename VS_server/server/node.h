@@ -51,11 +51,21 @@ struct Node {
     //     그 `S` 가 **주 노드의 비트열을 덮는다.** 그래서 ②-c 가 ②-b 보다 먼저다.
     int         mod_bits[REG_MODS_MAX];   // 자리 비트열(자리 10칸을 넘는 비트 포함)
     int         mod_bits_n;               // 해독한 비트 수. **0 = 안 읽었다**(모른다이지 0 이 아니다)
+    // ── 🔴 `V` 프레임이 싣는 **센서가 잰 값**. 비트와 **다른 축**이다
+    //   `mod_val_has` 가 false 면 *"못 쟀다"* 다 — 🔴 **`0` 으로 접지 마라.**
+    //   ⚠ 그리고 `mod_bits` 의 `known`(= 폭이 닿았나)과도 **다른 것**이다.
+    //     폭은 전송 계층이고 이것은 측정 계층이다. 오늘 그 둘을 겸한 이름이 결함을 숨겼다.
+    long        mod_val[REG_MODS_MAX];
+    bool        mod_val_has[REG_MODS_MAX];
+    long long   mod_val_ms[REG_MODS_MAX];  // 받은 시각. 화면에 `age_ms` 로 나간다
 
     Node() : fd(BAD_SOCK), seen(false), last_ms(0), last_epoch_ms(0),
              connected_ms(0), frames(0), drops(0), online(false), offline_episodes(0),
              reg_n(-1), reg_drain(-1), reg_done(false), reg_giveup(false),
-             reg_first_ms(0), q_sent(0), last_q_ms(0), mod_bits_n(0) {}
+             reg_first_ms(0), q_sent(0), last_q_ms(0), mod_bits_n(0) {
+        // 🔑 값은 **없음**이 기본이다. `0` 이 아니라 "아직 못 받았다" 로 시작한다
+        for (int i = 0; i < REG_MODS_MAX; i++) { mod_val[i] = 0; mod_val_has[i] = false; mod_val_ms[i] = 0; }
+    }
 
     void reg_reset() {          // 세션이 새로 서면 등록도 처음부터다
         reg_n = -1; reg_drain = -1; reg_done = false; reg_giveup = false;

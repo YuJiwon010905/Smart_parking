@@ -266,10 +266,64 @@ public:
     // ⚠ 이 함수 안에서 오래 걸리는 일을 하지 마라 — 서버의 한 박자 안에서 불린다.
     void onCommandResult(CmdResultFn fn);
 
+    // 🔴 **자리 점유가 바뀌면 불린다** — 센서가 말한 변화를 그대로 받는다.
+    //
+    //   ```
+    //   void onOccupancy(ParkingServer& srv, const std::string& spot,
+    //                    const std::string& module, bool occupied) {
+    //       if (module != "A1") return;                // 🔓 원하는 센서만 골라 쓴다
+    //       if (occupied) srv.send("P1", "LD", 1);     // 다른 장치에 지시해도 된다
+    //   }
+    //   srv.onOccupancyChanged(onOccupancy);
+    //   ```
+    //
+    // 🔴 **모듈 단위로 불린다.** 한 자리에 센서가 둘이면 **각각** 온다 —
+    //   서버가 자리 하나로 합쳐 주지 않는다. **합칠지 말지는 기여자의 선택**이다.
+    // 🔑 **센서(`I*`)만 온다.** 명령 모듈의 에코는 안 온다 — 자기 명령이 자기를 부르지 않는다.
+    // 🔑 **상승·하강 둘 다 온다.** 한쪽만 쓰려면 `occupied` 로 갈라라.
+    // 🔑 **첫 관측에서는 안 불린다** — 기동 직후의 값은 "변화"가 아니라 처음 본 것이다.
+    // ⚠ `parking()` 인 자리에만 온다. 일반영역은 점유를 보고할 의무가 없다.
+    // ⚠ 이 함수 안에서 오래 걸리는 일을 하지 마라 — 서버의 한 박자 안에서 불린다.
+    //   그리고 여기서 낸 명령은 **그 박자의 창에 실려 나간다.**
+    void onOccupancyChanged(OccupancyFn fn);
+
+    // 🔴 **센서 값이 올 때마다 불린다** — **점유가 안 바뀌어도** 온다.
+    //
+    //   ```
+    //   void onValue(ParkingServer& srv, const std::string& spot,
+    //                const std::string& module, long value) {
+    //       if (module != "A1") return;
+    //       srv.send("P1", "L2", value);        // 거리 그대로 표시기에
+    //   }
+    //   srv.onSensorValue(onValue);
+    //   ```
+    //
+    // 🔑 **`onOccupancyChanged` 와 역할이 다르다:**
+    //     `onOccupancyChanged` = **상태가 바뀌었다**(들어왔다/나갔다)
+    //     `onSensorValue`      = **값이 흐른다**(60 → 40 → 20cm) — 주차 유도가 이것이다
+    // 🔑 값이 **있을 때만** 불린다 — *"못 쟀다"* 는 사건이 아니라서 안 부른다.
+    // ⚠ **자주 불린다**(슬롯당 센서 수만큼). 무거운 일을 하지 마라. 거르는 것은 기여자 몫이다.
+    // 🔑 같은 슬롯에서 **이것이 `onOccupancyChanged` 보다 먼저** 불린다 —
+    //   값을 저장해 뒀다가 점유 콜백에서 쓰는 것이 가능하다.
+    void onSensorValue(SensorValueFn fn);
+
+    // 🔴 **로그 한 줄.** `std::cout` 대신 이것을 써라 —
+    //   **서버 로그와 같은 시각 형식**으로 찍힌다(`2026-08-21 00:15:37  ▸ ...`).
+    //
+    // 🔑 **왜 중요한가**: 네 줄이 서버 줄과 **대조가 되어야** 무엇이 언제 일어났는지 알 수 있다.
+    //   `std::cout` 으로 찍으면 시각이 없어서 **다른 줄 사이 어디였는지 모른다** —
+    //   그러면 값은 찍히는데 **아무것도 판정할 수 없다**(실제로 그렇게 한 번 막혔다).
+    // ⚠ 자기 시각 형식을 만들지 마라. 형식이 갈리면 그것이 두 번째 판정자가 된다.
+    void log(const std::string& msg) const;
+
     // 🔑 **장치가 붙어서 등록까지 마쳤나.** 명령을 내기 전에 이것부터 봐라 —
     //   안 붙었으면 `send()` 가 `false` 를 내고 로그에 *"노드 `P1` 를 모른다"* 가 찍힌다.
     //   ⚠ **접속만으로는 부족하다.** 등록(`D`)이 끝나야 모듈 이름을 풀 수 있다.
     bool deviceReady(const std::string& devid) const;
+
+    // CODEX FIX: server-authoritative availability used by the entrance
+    // controller. A spot is available only when neither occupied nor reserved.
+    bool parkingSpotAvailable(const std::string& spotId) const;
 
     // 🔑 **단조 시계(ms).** `onTick` 에서 주기 동작을 쓰려면 이것이 필요하다 —
     //   `onTick` 은 매 박자 불리므로 "언제 할 것인가"는 호출자가 정해야 한다.
@@ -314,5 +368,11 @@ private:
 void buildLot(ParkingLot& lot);              // ① 주차장을 조립한다
 void onTick(ParkingServer& srv);             // ② 한 박자마다 — 명령을 여기서 낸다
 void onCmdResult(const CmdResult& r);        // ③ 명령 결과 — 성공 / 거절 / 무응답
+void onOccupancy(ParkingServer& srv, const std::string& spot, const std::string& module,
+                 bool occupied, const SensorMeasure& measure);  // ④ 점유 변화(모듈 단위 · 값 포함)
+void onSensorValue(ParkingServer& srv, const std::string& spot,
+                   const std::string& module, long value);      // ⑤ 값이 올 때마다
+// CODEX FIX: server-side reset hook used by wsapi.h.
+void onControllerReset(ParkingServer& srv);
 
 #endif  // PARKING_H
