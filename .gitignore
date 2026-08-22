@@ -12,3 +12,4 @@ VS_server/server/server.vcxproj.filters
 arduino_server_prompt.md
 CODEX_ANALYSIS.md
 server_arduino_protocol.md
+.vs/
