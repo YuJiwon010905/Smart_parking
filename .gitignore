@@ -6,9 +6,7 @@ VS_server/.vs
 VS_server/x64
 VS_server/server/.vs
 VS_server/server/x64
-VS_server/server/server.vcxproj
-VS_server/server/server.vcxproj.user
-VS_server/server/server.vcxproj.filters
+
 arduino_server_prompt.md
 CODEX_ANALYSIS.md
 server_arduino_protocol.md
