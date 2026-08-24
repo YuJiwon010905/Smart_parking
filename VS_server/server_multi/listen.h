@@ -36,15 +36,19 @@
         lsn_ard   = listen_on(g_port_ardu);
         lsn_http  = listen_on(g_port_web);
         lsn_phone = listen_on(g_port_cam);
+        lsn_user_entry  = listen_on(PORT_USER_ENTRY);
+        lsn_user_lookup = listen_on(PORT_USER_LOOKUP);
         // 🔴 포트를 못 잡았으면 **그 사실을 로그에 남기고** 죽는다.
         // 08-16 에 `프레임 0` 짜리 짧은 인스턴스가 여럿 있었는데, 관측자가 그것이
         // "장치가 안 붙은 것"인지 "포트를 못 잡은 것"인지 **가를 수 없어서** 한참 헤맸다.
         // 0 이 "나쁨"인지 "해당 없음"인지 가르는 것 — 그게 관측의 절반이다.
-        if (lsn_ard == BAD_SOCK || lsn_http == BAD_SOCK || lsn_phone == BAD_SOCK) {
+        if (lsn_ard == BAD_SOCK || lsn_http == BAD_SOCK || lsn_phone == BAD_SOCK
+            || lsn_user_entry == BAD_SOCK || lsn_user_lookup == BAD_SOCK) {
             // 🔴 dev 는 기계용 경계 줄을 안 찍는다. **왜 못 떴는지만** 사람 말로 말한다.
             std::cout << "\n🔴 포트를 못 잡았다. 이미 누가 쓰고 있거나 권한이 없다.\n"
                       << "   웹 " << g_port_web << " · 아두이노 " << g_port_ardu
-                      << " · 카메라 " << g_port_cam << "\n"
+                      << " · 카메라 " << g_port_cam << " · 사용자 " << PORT_USER_ENTRY
+                      << "/" << PORT_USER_LOOKUP << "\n"
                       << "   확인 : lsof -nP -iTCP:" << g_port_web << " -sTCP:LISTEN\n"
                       << "   다른 포트로 : ./srv --port-web=<값> --port-ardu=<값> --port-cam=<값>\n\n";
             // CODEX FIX: openPorts() is bool. Returning 1 here made a bind/listen
@@ -60,6 +64,8 @@
                       << " · 아두이노 " << PORT_ARDUINO << " · 카메라 " << PORT_PHONE << ")\n";
         std::cout << "\n  개발용 주차 서버  (pid " << cur_pid() << ")\n"
                   << "  화면 http://127.0.0.1:" << g_port_web << "/\n"
+                  << "  입차 사용자 http://127.0.0.1:" << PORT_USER_ENTRY << "/\n"
+                  << "  차량 조회 http://127.0.0.1:" << PORT_USER_LOOKUP << "/\n"
                   << "  아두이노 TCP " << g_port_ardu << "  ·  카메라 " << g_port_cam << "\n"
                   << "  ─────────────────────────────────────────\n";
         std::cout.flush();
@@ -113,4 +119,3 @@
         // 누계를 이 줄에 싣는다 — **로그 뒤쪽이 잘려도 이 한 줄로 인스턴스 총계가 복원된다.**
         // 🔴 dev 는 기계용 종료 줄을 안 찍는다.
     }
-

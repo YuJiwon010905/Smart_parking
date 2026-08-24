@@ -352,6 +352,21 @@ private:
     Impl* p_;
 };
 
+// 사용자용 입차 화면과 lot.cpp의 중앙 제어기 사이의 좁은 경계다.
+// Browser는 이 값을 표시하고 선택 요청만 보낼 뿐, 세션/빈자리/배정 여부를 판단하지 않는다.
+struct UserEntryStatus {
+    bool active;
+    bool awaiting_selection;
+    std::string selected_slot;
+    unsigned long long generation;
+    UserEntryStatus() : active(false), awaiting_selection(false), generation(0) {}
+};
+
+UserEntryStatus userEntryStatus();
+bool userEntryGuideReady(const ParkingServer& srv);
+bool onUserSlotSelection(ParkingServer& srv, const std::string& slot,
+                         std::string& code, std::string& message);
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 🔴🔴 **기여자가 구현하는 훅 셋** — 선언은 여기, 정의는 `lot.cpp` 에 있다
 //

@@ -17,7 +17,7 @@
   자기 자신을 포함해서 재면 값이 자기를 바꿔 영원히 안 맞는다 — 그래서 정규화 후에 잰다.
   판정: `web/tools/deploy-screen.mjs --check`
 -->
-<meta name="screen-build" content="src=f9f21fdc36cf git=22cbf2d at=2026-08-21T00:43:31">
+<meta name="screen-build" content="__UNSTAMPED__">
 <title>주차 관제 — 실시간 자리 현황</title>
 <!--
   주차 관제 데모 (단일 파일 · 외부 의존성 없음)
@@ -30,28 +30,28 @@
 -->
 <style>
   :root {
-    --bg:          #eef1f6;
+    --bg:          #f2f8fc;
     --panel:       #ffffff;
-    --ink:         #1c2431;
-    --ink-dim:     #5c6779;
-    --line:        #d9dfe8;
-    --accent:      #2f6fed;
+    --ink:         #183750;
+    --ink-dim:     #63788a;
+    --line:        #d5e4ee;
+    --accent:      #258bd5;
 
-    --free-bg:     #ffffff;
-    --free-line:   #22a06b;
-    --free-ink:    #14764d;
+    --free-bg:     #edf8ff;
+    --free-line:   #258bd5;
+    --free-ink:    #146baa;
 
     --resv-bg:     #fff8e6;
     --resv-line:   #d99408;
     --resv-ink:    #8a5d00;
 
-    --occ-bg:      #eceff4;
-    --occ-line:    #9aa4b4;
-    --occ-ink:     #55606f;
+    --occ-bg:      #edf2f6;
+    --occ-line:    #96a9b6;
+    --occ-ink:     #526878;
 
-    --done-bg:     #e8f3ff;
-    --done-line:   #2f6fed;
-    --done-ink:    #14448f;
+    --done-bg:     #e7efff;
+    --done-line:   #315fbb;
+    --done-ink:    #23468f;
 
     /* 🔴 비활성 자리(REQ-0296 · 사용자 지시 "회색"). **`--occ-*`(상태 미상)와 값이 달라야 한다** —
        같으면 *"값을 기다리는 자리"* 와 *"영원히 값이 없는 자리"* 가 구분되지 않는다. */
@@ -61,49 +61,12 @@
     --inact-line:  #949494;
     --inact-ink:   #5c5c5c;
 
-    --mine:        #7a3ff2;
+    --mine:        #6c5ce7;
     --warn-bg:     #fdeaea;
     --warn-line:   #d64545;
     --warn-ink:    #9b2020;
-    --ok-ink:      #14764d;
-    --radius:      12px;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg:        #12161d;
-      --panel:     #1a2029;
-      --ink:       #e6ebf3;
-      --ink-dim:   #98a3b4;
-      --line:      #2b3441;
-      --accent:    #6c9bff;
-
-      --free-bg:   #16241d;
-      --free-line: #35c98a;
-      --free-ink:  #6fe0ae;
-
-      --resv-bg:   #2a2113;
-      --resv-line: #e0a83a;
-      --resv-ink:  #f3cd7c;
-
-      --occ-bg:    #202631;
-      --occ-line:  #59647a;
-      --occ-ink:   #9aa6b8;
-
-      --done-bg:   #16243d;
-      --done-line: #6c9bff;
-      --done-ink:  #a9c6ff;
-
-      --inact-bg:   #303030;
-      --inact-line: #767676;
-      --inact-ink:  #b4b4b4;
-
-      --mine:      #b18cff;
-      --warn-bg:   #331a1a;
-      --warn-line: #e06a6a;
-      --warn-ink:  #ffb3b3;
-      --ok-ink:    #6fe0ae;
-    }
+    --ok-ink:      #146baa;
+    --radius:      16px;
   }
 
   * { box-sizing: border-box; }
@@ -115,9 +78,11 @@
   body {
     margin: 0;
     padding: 18px;
-    background: var(--bg);
+    background-color: var(--bg);
+    background-image: radial-gradient(color-mix(in srgb, var(--accent) 20%, transparent) 1px, transparent 1px);
+    background-size: 24px 24px;
     color: var(--ink);
-    font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Segoe UI Variable', 'Segoe UI', 'Pretendard', 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
     line-height: 1.5;
   }
 
@@ -131,9 +96,17 @@
 
   .topbar {
     display: flex; flex-wrap: wrap; gap: 12px;
-    align-items: flex-end; justify-content: space-between;
-    margin-bottom: 14px;
+    align-items: center; justify-content: space-between;
+    margin-bottom: 14px; padding: 16px 18px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: 0 12px 34px rgba(37,91,132,.10);
   }
+  .topbar__title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand-mark { display: grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px;
+                border-radius: 13px; background: #183750; color: #ffffff;
+                font: 900 22px/1 'Segoe UI Variable', 'Segoe UI', sans-serif;
+                box-shadow: 0 8px 20px rgba(24,55,80,.20); }
   .topbar h1 { margin: 0; font-size: 24px; letter-spacing: -0.4px; }
   .topbar .sub { margin: 2px 0 0; color: var(--ink-dim); font-size: 13px; }
   .topbar__status { text-align: right; font-size: 13px; }
@@ -192,7 +165,8 @@
            grid-template-areas: "grid detail info"; }
   }
 
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  section { background: color-mix(in srgb, var(--panel) 96%, transparent); border: 1px solid var(--line);
+            border-radius: var(--radius); padding: 18px; box-shadow: 0 14px 38px rgba(37,91,132,.09); }
   section h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-dim); }
   .side h2 + * { margin-bottom: 18px; }
 
@@ -348,7 +322,7 @@
   .zctl__prac > summary { font-size: 10px; opacity: .65; cursor: pointer; }
   /* 🔴 상태 줄 — 색만으로 뜻을 나르지 않는다. 문구가 이미 뜻을 말하고 색은 거드는 것이다. */
   .zctl__msg { font-size: 10.5px; margin-top: 2px; }
-  .zctl__msg[data-kind="ok"]   { color: #1a8f3c; }
+  .zctl__msg[data-kind="ok"]   { color: var(--ok-ink); }
   .zctl__msg[data-kind="bad"]  { color: #c62828; }
   .zctl__msg[data-kind="warn"] { color: #a06800; }
   .zctl__msg[data-kind="wait"] { color: var(--ink-dim); }
@@ -356,7 +330,7 @@
   /* 🔴 **동작 상태등 — 셋.** 색만으로 뜻을 나르지 않는다(색각 이상·스크린리더):
      도형이 다르고(● ▲ ○) `aria-label` 에 문장이 붙는다. **모름을 녹/적으로 칠하지 않는다.** */
   .zlamp { flex: 0 0 auto; font-size: 10px; line-height: 1; width: 1em; text-align: center; }
-  .zlamp[data-state="ok"]      { color: #1a8f3c; }
+  .zlamp[data-state="ok"]      { color: var(--ok-ink); }
   .zlamp[data-state="bad"]     { color: #c62828; }
   .zlamp[data-state="unknown"] { color: var(--ink-dim); opacity: .8; }
   /* 🔑 강조축 — **조작을 막는 것만 진하다.** 막지 않는 미상은 조용한 배경이다(원장 §5.33).
@@ -546,6 +520,8 @@
 
   <header class="topbar">
     <div class="topbar__title">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <div>
       <h1>주차 관제</h1>
       <!-- 🔴 **정적 문구로 지형을 설명하지 않는다** (REQ-0290 · 사용자: *"안내대로 동작하지 않는다"*).
            있던 문구: `2열 5행 · 10칸 · 빈자리를 눌러 예약합니다` — 둘 다 틀렸다:
@@ -554,6 +530,7 @@
                 → 안내가 없는 동작을 하라고 시키고 있었다. 사용자는 그대로 했고 아무 일도 안 났다
            🔑 지형은 `map` 봉투가 준다. 문구를 그것으로 만들면 낡지 않는다. -->
       <p class="sub" id="grid-sub">연결 준비 중…</p>
+      </div>
     </div>
     <div class="topbar__status">
       <p id="conn-status" class="conn" role="status" aria-live="polite">

@@ -414,7 +414,13 @@
     }
     void ws_broadcast(const std::string& payload) {
         for (std::map<sock_t, Conn>::iterator it = conns.begin(); it != conns.end(); ++it)
-            if (it->second.kind == Conn::WS) ws_send(it->first, payload);
+            if (it->second.kind == Conn::WS && it->second.site == Conn::ADMIN)
+                ws_send(it->first, payload);
+    }
+    void ws_broadcast_site(Conn::Site site, const std::string& payload) {
+        for (std::map<sock_t, Conn>::iterator it = conns.begin(); it != conns.end(); ++it)
+            if (it->second.kind == Conn::WS && it->second.site == site)
+                ws_send(it->first, payload);
     }
     // 🔴 **이름이 `dead` 였다.** `-Wshadow` 가 짚었다 — 바깥 `dead` 를 가리고 있었다.
     //   같은 이름이 **셋**이었다: 이 멤버(연결) · `downlink.h` 의 지역(rid) · `serve.h` 의 지역(장치id)

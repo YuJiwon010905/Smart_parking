@@ -105,6 +105,7 @@ struct ParkingController {
     long long exitOpenedAt;
     long long entryRetryAt;
     long long exitRetryAt;
+    unsigned long long entryGeneration;
 
     ParkingController()
         : entranceKnown(false), entranceDetected(false),
@@ -115,7 +116,7 @@ struct ParkingController {
           retryEntryClose(false), retryExitClose(false),
           assignedSlot(-1), wrongSlot(-1),
           entryOpenedAt(0), exitOpenedAt(0),
-          entryRetryAt(0), exitRetryAt(0) {
+          entryRetryAt(0), exitRetryAt(0), entryGeneration(0) {
         for (int i = 0; i < PARKING_SLOT_COUNT; i++) {
             slotKnown[i] = false;
             occupied[i] = false;
@@ -199,32 +200,23 @@ void clearExitState() {
 }
 
 void beginEntry(ParkingServer& srv) {
-    const int selected = firstFreeParkingSlot(srv);
-    if (selected == -2) {
+    const int available = firstFreeParkingSlot(srv);
+    if (available == -2) {
         srv.log("[입차] 주차 센서 초기값이 모두 오지 않아 배정을 보류한다");
         return;
     }
-    if (selected < 0) {
+    if (available < 0) {
         srv.log("[입차] PARKING_FULL — 빈 주차면 없음");
         return;
     }
-    bool ready = srv.moduleReady(ENTRY_GATE.devid, ENTRY_GATE.module);
-    for (int i = 0; i < PARKING_SLOT_COUNT; i++)
-        ready = ready && srv.moduleReady(PARKING_LED[i].devid, PARKING_LED[i].module);
-    if (!ready) {
-        srv.log("[입차] Arduino 등록 미완료 — 게이트를 열지 않는다");
-        return;
-    }
-
-    // 세 안내등과 입구 게이트를 같은 하행 창에 묶는다.
-    if (!queueEntryBatch(srv, selected, 1)) return;
-    g_ctrl.assignedSlot = selected;
+    // 입구 감지만으로 자리를 자동 배정하지 않는다. 사용자가 8080 화면에서
+    // 빈자리를 선택하면 onUserSlotSelection()이 다시 서버 상태를 검증한 뒤 배정한다.
+    g_ctrl.assignedSlot = -1;
     g_ctrl.wrongSlot = -1;
-    for (int i = 0; i < PARKING_SLOT_COUNT; i++) g_ctrl.entryBaseline[i] = g_ctrl.occupied[i];
+    g_ctrl.entryGeneration++;
     g_ctrl.entryActive = true;
     g_ctrl.entryOpenedAt = srv.nowMs();
-    srv.log("[입차] ENTRY_APPROACH → " + parkingName(selected)
-            + " 배정 · 안내등 ON · 입구 게이트 OPEN 요청");
+    srv.log("[입차] ENTRY_APPROACH → 사용자 주차면 선택 대기");
 }
 
 void finishEntry(ParkingServer& srv, const std::string& reason) {
@@ -315,6 +307,13 @@ void controllerTick(ParkingServer& srv) {
         }
     }
 
+    // 배정 전 차량이 입구를 떠나면 선택 세션만 종료한다. 아직 게이트/LED 명령을
+    // 내리지 않았으므로 actuator 정리 명령은 필요하지 않다.
+    if (g_ctrl.entryActive && g_ctrl.assignedSlot < 0 && !g_ctrl.entranceDetected) {
+        srv.log("[입차] 선택 전 입구 감지 해제 → 세션 종료");
+        clearEntryState();
+    }
+
     // 출구는 U2 상승 시 서버가 허가하고, 감지 후 하강하면 통과 완료다.
     if (g_ctrl.exitKnown && g_ctrl.exitDetected
         && !g_ctrl.exitLatched && !g_ctrl.exitActive) {
@@ -346,6 +345,69 @@ void controllerTick(ParkingServer& srv) {
     }
 }
 } // namespace
+
+UserEntryStatus userEntryStatus() {
+    UserEntryStatus s;
+    s.active = g_ctrl.entryActive;
+    s.awaiting_selection = g_ctrl.entryActive && g_ctrl.assignedSlot < 0;
+    if (g_ctrl.assignedSlot >= 0) s.selected_slot = parkingName(g_ctrl.assignedSlot);
+    s.generation = g_ctrl.entryGeneration;
+    return s;
+}
+
+bool userEntryGuideReady(const ParkingServer& srv) {
+    bool ready = srv.moduleReady(ENTRY_GATE.devid, ENTRY_GATE.module);
+    for (int i = 0; i < PARKING_SLOT_COUNT; i++)
+        ready = ready && srv.moduleReady(PARKING_LED[i].devid, PARKING_LED[i].module);
+    return ready;
+}
+
+bool onUserSlotSelection(ParkingServer& srv, const std::string& slot,
+                         std::string& code, std::string& message) {
+    const int selected = parkingIndex(slot);
+    if (!g_ctrl.entryActive) {
+        code = "ENTRY_INACTIVE";
+        message = "입차 차량이 감지된 뒤 선택할 수 있습니다.";
+        return false;
+    }
+    if (g_ctrl.assignedSlot >= 0) {
+        code = "ALREADY_ASSIGNED";
+        message = "이미 주차면이 배정되었습니다.";
+        return false;
+    }
+    if (selected < 0 || !g_ctrl.slotKnown[selected]) {
+        code = "SLOT_UNAVAILABLE";
+        message = "현재 상태를 확인할 수 없는 주차면입니다.";
+        return false;
+    }
+    if (g_ctrl.occupied[selected] || !srv.parkingSpotAvailable(slot)) {
+        code = "SLOT_UNAVAILABLE";
+        message = "이미 사용 중이거나 예약된 주차면입니다.";
+        return false;
+    }
+
+    if (!userEntryGuideReady(srv)) {
+        code = "SYSTEM_NOT_READY";
+        message = "주차 안내 장치를 준비하고 있습니다. 잠시 후 다시 시도해 주세요.";
+        return false;
+    }
+
+    if (!queueEntryBatch(srv, selected, 1)) {
+        code = "COMMAND_FAILED";
+        message = "주차 안내를 시작하지 못했습니다. 다시 시도해 주세요.";
+        return false;
+    }
+
+    g_ctrl.assignedSlot = selected;
+    g_ctrl.wrongSlot = -1;
+    for (int i = 0; i < PARKING_SLOT_COUNT; i++)
+        g_ctrl.entryBaseline[i] = g_ctrl.occupied[i];
+    g_ctrl.entryOpenedAt = srv.nowMs();
+    srv.log("[입차] USER_SELECTED " + slot + " · 안내등 ON · 입구 게이트 OPEN 요청");
+    code = "ASSIGNED";
+    message = slot + " 주차면으로 안내를 시작합니다.";
+    return true;
+}
 
 // 서버의 주기 tick: timeout과 재시도 판단도 Arduino가 아니라 여기서 수행한다.
 void onTick(ParkingServer& srv) {

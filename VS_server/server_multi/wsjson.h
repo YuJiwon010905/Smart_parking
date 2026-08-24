@@ -126,6 +126,7 @@
             return;
         }
         ws_broadcast(map_json());
+        push_user_entry();
     }
 
     // ── REQ-0203 4c: `state` 봉투 + `actions` (설계 §6.5·§6.8·§6.9) ──────────────
@@ -407,7 +408,74 @@
             // `number`·`choice` — 비트가 0 이든 1 이든 **그 값이 됐다는 증거가 아니다.**
             o << ",\"confirmed\":\"partial\"";
     }
-    void push_state() { ws_broadcast(state_json()); }
+    // 8080 사용자 화면 전용 최소 상태. 관리자 snapshot의 device/debug/user_id는
+    // 사용자 포트로 보내지 않고, 화면이 필요한 주차 상태와 서버 판정만 전달한다.
+    std::string user_entry_json() {
+        const UserEntryStatus entry = userEntryStatus();
+        const bool guide_ready = owner_ && userEntryGuideReady(*owner_);
+
+        struct UserSlotView {
+            std::string id;
+            std::string state;
+            bool selectable;
+        };
+        std::vector<UserSlotView> view;
+        int available = 0;
+
+        for (size_t i = 0; i < lot.zones().size(); i++) {
+            const Zone& z = lot.zones()[i];
+            if (z.kind != "parking") continue;
+            const int si = slot_index(z.id);
+            std::vector<SensorReading> readings;
+            int known_n = 0, total_n = 0, ones_n = 0;
+            zone_readings(z, readings, known_n, total_n, ones_n);
+            const bool known = total_n > 0 && known_n == total_n;
+            const bool occupied = known && behavior_for(z.id).occupied(readings);
+            const bool reserved = si >= 0 && slots[si].reserved;
+            const bool selected = !entry.selected_slot.empty() && entry.selected_slot == z.id;
+
+            UserSlotView s;
+            s.id = z.id;
+            if (selected) s.state = "SELECTED";
+            else if (!known) s.state = "UNKNOWN";
+            else if (occupied) s.state = "OCCUPIED";
+            else if (reserved) s.state = "RESERVED";
+            else { s.state = "EMPTY"; available++; }
+            s.selectable = entry.awaiting_selection && guide_ready
+                           && s.state == "EMPTY" && zone_block_reason(z).empty();
+            view.push_back(s);
+        }
+
+        const char* phase = entry.awaiting_selection ? "ENTRY_ACTIVE"
+                          : (!entry.selected_slot.empty() ? "SLOT_SELECTED" : "IDLE");
+        const char* reservation = !entry.selected_slot.empty() ? "ASSIGNED"
+                                : (entry.awaiting_selection ? "WAITING_SELECTION" : "NONE");
+        std::ostringstream o;
+        o << "{\"type\":\"user_parking_state\",\"ts_ms\":" << epoch_ms()
+          << ",\"available_count\":" << available
+          << ",\"entry_active\":" << (entry.active ? "true" : "false")
+          << ",\"phase\":" << jstr(phase)
+          << ",\"selected_slot\":";
+        if (entry.selected_slot.empty()) o << "null"; else o << jstr(entry.selected_slot);
+        o << ",\"reservation_state\":" << jstr(reservation)
+          << ",\"guide_ready\":" << (guide_ready ? "true" : "false")
+          << ",\"slots\":[";
+        for (size_t i = 0; i < view.size(); i++) {
+            if (i) o << ",";
+            o << "{\"id\":" << jstr(view[i].id)
+              << ",\"state\":" << jstr(view[i].state)
+              << ",\"selectable\":" << (view[i].selectable ? "true" : "false") << "}";
+        }
+        o << "]}";
+        return o.str();
+    }
+    void push_user_entry() {
+        ws_broadcast_site(Conn::USER_ENTRY, user_entry_json());
+    }
+    void push_state() {
+        ws_broadcast(state_json());
+        push_user_entry();
+    }
 
     std::string snapshot_json() {
         std::ostringstream o;
@@ -493,5 +561,6 @@
         // 🔑 **옛 봉투와 같은 순간에 새 봉투를 낸다** — 같은 서버 상태에서 파생시키므로
         //   두 경로가 서로 다른 말을 할 수 없다(web §1.2 의 "한 화면이 두 진실" 방지).
         ws_broadcast(state_json());
+        push_user_entry();
     }
 

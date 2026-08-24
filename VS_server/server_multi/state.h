@@ -28,6 +28,7 @@
     // `get_map` 남용 방어 — **정합성용이 아니라 서버 보호용**이다(설계 §6.8)
     long long getmap_win_ms; int getmap_in_win; long long getmap_rejects;
     sock_t lsn_ard, lsn_http, lsn_phone;
+    sock_t lsn_user_entry, lsn_user_lookup;
     std::map<sock_t, std::string> phones;   // 폰 연결 → 수신 버퍼 (연결마다 따로!)
     // ⚠ `ard` 는 이제 "아두이노 연결"이 아니라 **주차 노드의 연결**이다(REQ-0083).
     // 이름을 안 바꾼 이유: 이 필드에 얽힌 상태·지표가 79곳인데, 그 전부를 건드리면

@@ -35,6 +35,8 @@
             FD_SET(lsn_ard, &rd);  if (lsn_ard  > mx) mx = lsn_ard;
             FD_SET(lsn_http, &rd); if (lsn_http > mx) mx = lsn_http;
             FD_SET(lsn_phone, &rd); if (lsn_phone > mx) mx = lsn_phone;
+            FD_SET(lsn_user_entry, &rd); if (lsn_user_entry > mx) mx = lsn_user_entry;
+            FD_SET(lsn_user_lookup, &rd); if (lsn_user_lookup > mx) mx = lsn_user_lookup;
             for (std::map<sock_t, std::string>::iterator it = phones.begin(); it != phones.end(); ++it) {
                 FD_SET(it->first, &rd);
                 if (it->first > mx) mx = it->first;
@@ -91,7 +93,15 @@
                 }
                 if (FD_ISSET(lsn_http, &rd)) {
                     sock_t c = accept(lsn_http, NULL, NULL);
-                    if (c != BAD_SOCK) { set_send_timeout(c); conns[c] = Conn(); }
+                    if (c != BAD_SOCK) { set_send_timeout(c); conns[c] = Conn(Conn::ADMIN); }
+                }
+                if (FD_ISSET(lsn_user_entry, &rd)) {
+                    sock_t c = accept(lsn_user_entry, NULL, NULL);
+                    if (c != BAD_SOCK) { set_send_timeout(c); conns[c] = Conn(Conn::USER_ENTRY); }
+                }
+                if (FD_ISSET(lsn_user_lookup, &rd)) {
+                    sock_t c = accept(lsn_user_lookup, NULL, NULL);
+                    if (c != BAD_SOCK) { set_send_timeout(c); conns[c] = Conn(Conn::USER_LOOKUP); }
                 }
                 if (FD_ISSET(lsn_phone, &rd)) {
                     sock_t c = accept(lsn_phone, NULL, NULL);

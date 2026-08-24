@@ -69,6 +69,52 @@
         std::string uid  = jget(msg, "user_id");
         if (uid == "null") uid.clear();
 
+        Conn::Site site = Conn::ADMIN;
+        std::map<sock_t, Conn>::const_iterator site_it = conns.find(fd);
+        if (site_it != conns.end()) site = site_it->second.site;
+
+        // 사용자 포트는 역할별 최소 명령만 허용한다. 관리자 명령을 숨기는 것에
+        // 그치지 않고 Server에서도 거절하여 포트 역할이 실제 권한 경계가 되게 한다.
+        if (site == Conn::USER_LOOKUP) {
+            if (type != "vehicle_lookup") {
+                send_err(fd, rid, "not_supported", "차량 조회 요청만 사용할 수 있습니다");
+                return;
+            }
+            std::string plate = jget(msg, "plate");
+            std::string normalized;
+            for (size_t i = 0; i < plate.size(); i++)
+                if (!isspace((unsigned char)plate[i])) normalized += plate[i];
+            send_vehicle_lookup(fd, rid, normalized);
+            return;
+        }
+
+        if (site == Conn::USER_ENTRY) {
+            if (type == "get_user_state") {
+                ws_send(fd, user_entry_json());
+                return;
+            }
+            if (type != "entry_select") {
+                send_err(fd, rid, "not_supported", "주차면 선택 요청만 사용할 수 있습니다");
+                return;
+            }
+            std::string code, message;
+            const bool ok = owner_ && onUserSlotSelection(*owner_, slot, code, message);
+            if (!owner_ && code.empty()) {
+                code = "SYSTEM_NOT_READY";
+                message = "주차 제어기가 준비되지 않았습니다.";
+            }
+            if (ok) assign_pending_entry_plate(slot);
+            std::ostringstream result;
+            result << "{\"type\":\"entry_select_result\",\"rid\":" << jstr(rid)
+                   << ",\"ok\":" << (ok ? "true" : "false")
+                   << ",\"code\":" << jstr(code)
+                   << ",\"message\":" << jstr(message)
+                   << ",\"slot\":" << jstr(slot) << "}";
+            ws_send(fd, result.str());
+            push_user_entry();
+            return;
+        }
+
         // ---- REQ-0203 4b: `get_map` (설계 §6.8)
         // 🔑 **접속 시의 `map` 과 같은 봉투를 쓴다.** 다른 타입을 만들면 같은 것을 두 형식으로
         //   만들게 되고 한쪽만 고치는 날이 온다.

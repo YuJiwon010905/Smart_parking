@@ -151,6 +151,7 @@ struct Pending {             // 아두이노에 내려보내고 ACK 를 기다�
 
 struct Conn {
     enum Kind { HTTP, WS } kind;
+    enum Site { ADMIN, USER_ENTRY, USER_LOOKUP } site;
     std::string inbuf;
     // 🔴 **`get_map` 상한은 연결별이다.**
     //   전역 창이면 **화면 여섯이 재접속하는 것만으로 상한을 넘긴다** — 각자 한 번씩 물었는데
@@ -159,7 +160,7 @@ struct Conn {
     //   ⚠ 주석은 원래 *"화면 하나가 1초에"* 라고 말하고 있었다 — **구현이 그 말과 달랐다.**
     //   🔑 고친 것은 상한값이 아니라 **누구를 세는가**다.
     long long getmap_win_ms; int getmap_in_win;
-    Conn() : kind(HTTP), getmap_win_ms(0), getmap_in_win(0) {}
+    explicit Conn(Site s = ADMIN) : kind(HTTP), site(s), getmap_win_ms(0), getmap_in_win(0) {}
 };
 
 struct Server {

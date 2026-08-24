@@ -17,6 +17,10 @@
 static const int  PORT_ARDUINO   = 9991;
 static const int  PORT_HTTP      = 9900;
 static const int  PORT_PHONE     = 5500;    // digitcam 폰(카메라) 수신
+// 사용자 화면은 관리자 화면과 분리한다. 포트 자체가 화면 역할을 결정하므로
+// 브라우저가 URL 파라미터나 클라이언트 상태로 권한/화면 종류를 고르지 않는다.
+static const int  PORT_USER_ENTRY  = 8080;  // 입차 차량: 빈자리 확인·주차면 선택
+static const int  PORT_USER_LOOKUP = 8081;  // 주차 완료 차량: 위치 조회
 // 폰 프레임은 JSON 이라 아두이노 라인(64B)보다 길다.
 static const size_t MAX_PHONE_LINE = 1024;
 static const size_t MAX_PLATE_BYTES = 32;   // 번호판 저장 상한(신형 10B, 여유 포함)
