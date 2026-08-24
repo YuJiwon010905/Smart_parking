@@ -21,7 +21,7 @@
         while (!v.empty() && (v[v.size()-1]==' '||v[v.size()-1]=='\r')) v.erase(v.size()-1);
         return v;
     }
-    void serve_file(sock_t fd, std::string path) {
+    void serve_file(sock_t fd, std::string path, Conn::Site site) {
         // 🔴 **쿼리를 가장 먼저 떼어낸다. 이 순서가 이 함수의 요점이다.**
         // 전에는 `"/"` 판정이 앞에 있고 쿼리 제거가 뒤에 있어서 `GET /?demo=1` 이 404 였다:
         //   `/?demo=1` 은 `"/"` 와 다르므로 index.html 로 **안 바뀌고**, 그 뒤 `?` 앞을 자르면
@@ -31,7 +31,19 @@
         // 그래야 `/?x` · `/index.html?x` · `/data_log.json?t=…` 가 **한 규칙**으로 처리된다.
         size_t q = path.find('?');
         if (q != std::string::npos) path = path.substr(0, q);
-        if (path.empty() || path == "/") path = "/index.html";
+        if (path.empty() || path == "/") {
+            if (site == Conn::USER_ENTRY) path = "/user_entry.html";
+            else if (site == Conn::USER_LOOKUP) path = "/user_lookup.html";
+            else path = "/index.html";
+        }
+        // 사용자 포트는 각 화면 하나만 제공한다. 관리자 화면과 data_log.json을
+        // 우연히 노출하지 않으며, 페이지 역할은 서버가 수락한 포트로 확정한다.
+        if ((site == Conn::USER_ENTRY && path != "/user_entry.html")
+            || (site == Conn::USER_LOOKUP && path != "/user_lookup.html")) {
+            const char* r = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            send_raw(fd, r, strlen(r), "HTTP 클라이언트");
+            return;
+        }
         // 경로 탈출 차단 — 데모여도 디렉터리를 서빙하는 코드에 이건 기본이다
         if (path.find("..") != std::string::npos || path.find('\\') != std::string::npos) {
             const char* r = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -117,7 +129,17 @@
                     if (it2->second.kind == Conn::WS) ws_n++;
                 if (ws_n > ws_peak) ws_peak = ws_n;
             }
-            logf("+WS", "업그레이드 완료");
+            const char* site_name = c.site == Conn::USER_ENTRY ? "입차 사용자"
+                                  : (c.site == Conn::USER_LOOKUP ? "차량 조회" : "관리자");
+            logf("+WS", std::string(site_name) + " 업그레이드 완료");
+            if (c.site == Conn::USER_ENTRY) {
+                ws_send(fd, user_entry_json());
+                return true;
+            }
+            if (c.site == Conn::USER_LOOKUP) {
+                ws_send(fd, "{\"type\":\"vehicle_lookup_ready\"}");
+                return true;
+            }
             ws_send(fd, snapshot_json());          // 접속 즉시 현재 상태(옛 봉투)
             // 🔴 **접속 즉시 새 봉투도 보낸다**(REQ-0203 4b/4c · web 실기 대조가 이 구멍을 찾았다).
             //   전에는 `state` 가 `push_snapshot()` 안에서만 방송돼서 **장치가 스냅샷을 밀 때까지
@@ -130,7 +152,7 @@
             ws_send(fd, state_json());
             return true;
         }
-        serve_file(fd, path);
+        serve_file(fd, path, c.site);
         return false;                              // 정적 응답은 Connection: close
     }
     // WS 프레임 파싱 — 클라이언트 프레임은 **항상 마스킹**돼 있다(§5.2)
@@ -185,6 +207,68 @@
     // **그 다음에** 디코딩한다. 한글이 recv 경계에서 갈리기 때문이고, 그 파일이
     // 그 경우를 실측으로 검증해 뒀다(digitcam 명세 §8.3, §10.6).
     std::map<std::string, std::string> plate_slot;   // 번호판 → 배정된 자리
+    std::string pending_entry_plate;                 // 선택 대기 중 먼저 인식된 번호판
+    unsigned long long pending_entry_generation = 0;
+
+    static bool valid_lookup_plate(const std::string& plate) {
+        if (plate.empty() || plate.size() > MAX_PLATE_BYTES) return false;
+        for (size_t i = 0; i < plate.size(); i++) {
+            const unsigned char ch = (unsigned char)plate[i];
+            if (ch < 0x20 || ch == 0x7F) return false;
+        }
+        return true;
+    }
+
+    void send_vehicle_lookup(sock_t fd, const std::string& rid, const std::string& plate) {
+        std::string status = "NOT_FOUND";
+        std::string slot;
+        if (!valid_lookup_plate(plate)) {
+            status = "ERROR";
+        } else {
+            std::map<std::string, std::string>::const_iterator it = plate_slot.find(plate);
+            if (it != plate_slot.end()) slot = it->second;
+            if (slot.empty()) {
+                for (int i = 0; i < 10; i++) {
+                    if (slots[i].reserved && slots[i].user_id == plate) {
+                        slot = SLOT_ID[i];
+                        break;
+                    }
+                }
+            }
+            if (!slot.empty()) {
+                const int si = slot_index(slot);
+                if (si >= 0 && slots[si].reserved && slots[si].occupied
+                    && slots[si].user_id == plate) status = "FOUND";
+                else status = "UNGUIDED";
+            }
+        }
+
+        std::ostringstream o;
+        o << "{\"type\":\"vehicle_lookup_result\",\"rid\":" << jstr(rid)
+          << ",\"status\":" << jstr(status) << ",\"plate\":" << jstr(plate)
+          << ",\"slot\":";
+        if (status == "FOUND") o << jstr(slot); else o << "null";
+        o << "}";
+        ws_send(fd, o.str());
+    }
+
+    void assign_pending_entry_plate(const std::string& slot) {
+        if (pending_entry_plate.empty()) return;
+        const UserEntryStatus entry = userEntryStatus();
+        if (!entry.active || entry.generation != pending_entry_generation) {
+            pending_entry_plate.clear();
+            pending_entry_generation = 0;
+            return;
+        }
+        const int si = slot_index(slot);
+        if (si < 0 || slots[si].occupied || slots[si].reserved) return;
+        const std::string plate = pending_entry_plate;
+        pending_entry_plate.clear();
+        pending_entry_generation = 0;
+        plate_slot[plate] = slot;
+        logf("✓", "사용자 선택 확정 — " + plate + " → " + slot);
+        dispatch('R', BAD_SOCK, "", slot, plate);
+    }
 
     int find_slot_by_user(const std::string& plate) const {
         for (int i = 0; i < 10; i++)
@@ -240,6 +324,16 @@
             }
         }
 
+        // 입차 세션이 자리 선택을 기다리는 중이면 번호판만 임시 보관한다.
+        // Browser가 아닌 Server의 선택 처리 경로가 최종 slot을 다시 검증하고 예약한다.
+        const UserEntryStatus entry = userEntryStatus();
+        if (entry.active && entry.awaiting_selection) {
+            pending_entry_plate = plate;
+            pending_entry_generation = entry.generation;
+            logf("=", "입차 선택 대기 — 번호판 " + plate + " 임시 보관");
+            return;
+        }
+
         // (3) 예약이 있으면 그 자리로 확정한다. 키는 번호판이다.
         int i = find_slot_by_user(plate);
         if (i >= 0) {
@@ -250,11 +344,17 @@
         }
 
         // (4) 예약이 없으면 빈자리를 배정한다(사용자 요구: "안 하면 빈자리").
-        int f = pick_free_slot();
+        int f = entry.active && !entry.selected_slot.empty()
+              ? slot_index(entry.selected_slot) : pick_free_slot();
         if (f < 0) {
             // 조용히 지나가지 않는다. 브라우저로 올리려면 새 WS 메시지가 필요한데
             // 그건 명세 변경이라 하지 않았다(REQ-0037 은 명세 무변경). 루트에 보고했다.
             logf("!", "빈자리 없음 — " + plate + " 배정 실패. 차단기를 열 자리가 없다");
+            return;
+        }
+        if (slots[f].occupied || slots[f].reserved) {
+            logf("!", "선택한 주차면을 더 이상 사용할 수 없음 — " + plate + " → "
+                      + SLOT_ID[f] + ". 새 자리를 임의 배정하지 않는다");
             return;
         }
         const Node* target_node = zone_sensor_owner(SLOT_ID[f]);

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f2f8fc">
+  <meta name="screen-build" content="user-entry-20260825-b">
+  <title>Smart Parking · 주차 공간 선택</title>
+  <style>
+    :root {
+      --ink:#183750; --muted:#63788a; --paper:#f2f8fc; --card:#ffffff;
+      --line:#d5e4ee; --primary:#258bd5; --primary-dark:#146baa; --primary-soft:#dff2ff;
+      --amber:#b8771d; --amber-bg:#fff0d5; --red:#a8463a; --red-bg:#f9e5e1;
+      --blue:#315fbb; --blue-bg:#e7efff; --shadow:0 18px 50px rgba(37,91,132,.12);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--paper);color:var(--ink);font-family:"Segoe UI Variable","Segoe UI",Pretendard,"Noto Sans KR","Apple SD Gothic Neo",sans-serif}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.30;background-image:radial-gradient(#8fb8d4 1px,transparent 1px);background-size:24px 24px;mask-image:linear-gradient(to bottom,#000,transparent 48%)}
+    button{font:inherit}
+    .shell{position:relative;width:min(1120px,100%);min-height:100vh;margin:auto;padding:28px clamp(18px,4vw,52px) 44px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:42px}
+    .brand{display:flex;align-items:center;gap:12px;font-weight:850;letter-spacing:-.03em}
+    .mark{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:var(--ink);color:#fff;font:900 22px/1 "Segoe UI Variable","Segoe UI",sans-serif;box-shadow:0 8px 20px rgba(24,55,80,.20)}
+    .brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-top:2px}
+    .connection{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.76);color:var(--muted);font-size:13px;font-weight:700}
+    .dot{width:8px;height:8px;border-radius:50%;background:#9baab4}.connection.online .dot{background:#38a8e8;box-shadow:0 0 0 4px rgba(56,168,232,.14)}.connection.offline .dot{background:var(--red)}
+    .hero{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(230px,.65fr);gap:28px;align-items:stretch;margin-bottom:28px}
+    .intro,.count-card{border:1px solid rgba(37,91,132,.11);border-radius:28px;background:rgba(255,255,255,.90);box-shadow:var(--shadow)}
+    .intro{padding:clamp(26px,4vw,48px)}
+    .eyebrow{display:flex;align-items:center;gap:9px;color:var(--primary);font-size:13px;font-weight:850;letter-spacing:.09em;text-transform:uppercase}
+    .eyebrow:before{content:"";width:28px;height:2px;background:currentColor}
+    h1{font-size:clamp(33px,5vw,58px);line-height:1.08;letter-spacing:-.055em;margin:18px 0 14px;max-width:700px}
+    .lead{margin:0;color:var(--muted);font-size:clamp(16px,2vw,19px);line-height:1.7;word-break:keep-all}
+    .count-card{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:30px;text-align:center;background:var(--ink);color:#fff;overflow:hidden;position:relative}
+    .count-card:after{content:"P";position:absolute;right:-20px;bottom:-56px;color:rgba(255,255,255,.045);font:900 190px/1 "Segoe UI Variable","Segoe UI",sans-serif}
+    .count-label{position:relative;color:#c4dbea;font-weight:750}.count{position:relative;font:900 clamp(64px,10vw,96px)/1 "Segoe UI Variable","Segoe UI",sans-serif;margin:12px 0 8px;letter-spacing:-.055em}.count-unit{position:relative;font-weight:800}
+    .panel{border:1px solid rgba(37,91,132,.11);border-radius:28px;background:var(--card);box-shadow:var(--shadow);padding:clamp(22px,3vw,34px)}
+    .panel-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:24px}
+    .panel h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.04em;margin:0 0 7px}.panel-sub{margin:0;color:var(--muted);line-height:1.5}
+    .legend{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.legend span{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;font-weight:700}.legend i{width:9px;height:9px;border-radius:50%;background:#93a7b5}.legend .free{background:var(--primary)}.legend .busy{background:var(--red)}.legend .reserved{background:var(--amber)}
+    .slots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+    .slot{position:relative;min-height:178px;padding:20px;border:1.5px solid var(--line);border-radius:22px;background:#f7fafc;color:var(--ink);text-align:left;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;overflow:hidden}
+    .slot:before{content:"";position:absolute;left:18px;right:18px;top:14px;height:5px;border:solid #c7d8e4;border-width:2px 0;border-radius:2px;opacity:.8}
+    .slot-code{display:block;font:900 39px/1 "Segoe UI Variable","Segoe UI",sans-serif;margin-top:29px;letter-spacing:-.055em}.slot-state{display:flex;align-items:center;gap:8px;margin-top:17px;color:var(--muted);font-size:14px;font-weight:800}.slot-state:before{content:"";width:9px;height:9px;border-radius:50%;background:#96a9b6}
+    .slot[data-state="EMPTY"]{background:#edf8ff;border-color:#9fd6f4}.slot[data-state="EMPTY"] .slot-state{color:var(--primary)}.slot[data-state="EMPTY"] .slot-state:before{background:var(--primary)}
+    .slot[data-state="OCCUPIED"]{background:var(--red-bg);border-color:#e7b9b1}.slot[data-state="OCCUPIED"] .slot-state{color:var(--red)}.slot[data-state="OCCUPIED"] .slot-state:before{background:var(--red)}
+    .slot[data-state="RESERVED"]{background:var(--amber-bg);border-color:#eccb95}.slot[data-state="RESERVED"] .slot-state{color:var(--amber)}.slot[data-state="RESERVED"] .slot-state:before{background:var(--amber)}
+    .slot[data-state="SELECTED"],.slot.candidate{background:var(--blue-bg);border-color:#7da5c4;box-shadow:0 0 0 3px rgba(49,94,132,.12)}.slot[data-state="SELECTED"] .slot-state,.slot.candidate .slot-state{color:var(--blue)}.slot[data-state="SELECTED"] .slot-state:before,.slot.candidate .slot-state:before{background:var(--blue)}
+    .slot.selectable{cursor:pointer}.slot.selectable:hover{transform:translateY(-4px);box-shadow:0 14px 30px rgba(37,139,213,.16);border-color:var(--primary)}.slot.selectable:focus-visible{outline:3px solid rgba(37,139,213,.30);outline-offset:3px}
+    .slot:disabled{cursor:not-allowed}.slot-tag{position:absolute;right:15px;top:29px;color:var(--primary);font-size:11px;font-weight:900;letter-spacing:.05em}
+    .actionbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:22px;padding:18px 20px;border-radius:18px;background:#f0f7fb;border:1px solid var(--line)}
+    .action-copy{min-width:0}.action-copy strong{display:block;font-size:16px;margin-bottom:4px}.action-copy span{color:var(--muted);font-size:13px;line-height:1.45}
+    .confirm{flex:0 0 auto;min-width:168px;min-height:54px;border:0;border-radius:16px;background:var(--primary);color:#fff;font-weight:850;cursor:pointer;box-shadow:0 10px 22px rgba(37,139,213,.25)}.confirm:hover{background:var(--primary-dark)}.confirm:disabled{background:#aab8c1;box-shadow:none;cursor:not-allowed}
+    .notice{display:none;margin-top:18px;padding:14px 16px;border-radius:14px;font-size:14px;font-weight:700;line-height:1.5}.notice.show{display:block}.notice.info{background:var(--blue-bg);color:var(--blue)}.notice.error{background:var(--red-bg);color:var(--red)}.notice.ok{background:var(--primary-soft);color:var(--primary-dark)}
+    footer{display:flex;justify-content:space-between;gap:16px;color:#778d9c;font-size:12px;margin-top:22px;padding:0 6px}
+    @media(max-width:760px){.shell{padding-top:18px}.hero{grid-template-columns:1fr;gap:14px;margin-bottom:16px}.count-card{min-height:190px}.slots{grid-template-columns:repeat(2,1fr)}.panel-head{align-items:flex-start;flex-direction:column}.legend{justify-content:flex-start}.actionbar{align-items:stretch;flex-direction:column}.confirm{width:100%}header{margin-bottom:24px}.brand small{display:none}}
+    @media(max-width:390px){.slots{grid-template-columns:1fr 1fr;gap:10px}.slot{min-height:152px;padding:15px}.slot-code{font-size:34px}.connection{padding:7px 9px}.connection span:last-child{display:none}}
+    @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand"><div class="mark">P</div><div>SMART PARKING<small>Entry guidance</small></div></div>
+      <div class="connection" id="connection"><span class="dot"></span><span id="connectionText">서버 연결 중</span></div>
+    </header>
+
+    <section class="hero" aria-labelledby="pageTitle">
+      <div class="intro">
+        <div class="eyebrow" id="phaseLabel">주차 현황</div>
+        <h1 id="pageTitle">한눈에 확인하고<br>편하게 주차하세요.</h1>
+        <p class="lead" id="lead">입구에 차량이 감지되면 이용 가능한 주차 공간을 선택할 수 있습니다.</p>
+      </div>
+      <aside class="count-card" aria-label="남은 주차면">
+        <span class="count-label">현재 이용 가능한 자리</span>
+        <strong class="count" id="availableCount">–</strong>
+        <span class="count-unit">자리 남음</span>
+      </aside>
+    </section>
+
+    <section class="panel" aria-labelledby="slotTitle">
+      <div class="panel-head">
+        <div><h2 id="slotTitle">주차 공간</h2><p class="panel-sub" id="panelSub">실시간 주차 현황을 불러오고 있습니다.</p></div>
+        <div class="legend" aria-label="상태 범례"><span><i class="free"></i>사용 가능</span><span><i class="busy"></i>사용 중</span><span><i class="reserved"></i>예약됨</span></div>
+      </div>
+      <div class="slots" id="slots" aria-live="polite"></div>
+      <div class="actionbar">
+        <div class="action-copy"><strong id="actionTitle">입차 차량을 기다리고 있습니다</strong><span id="actionDesc">빈자리 현황은 언제든 확인할 수 있습니다.</span></div>
+        <button class="confirm" id="confirmButton" type="button" disabled>주차면 선택하기</button>
+      </div>
+      <div class="notice" id="notice" role="status" aria-live="polite"></div>
+    </section>
+    <footer><span>선택과 배정은 주차 서버에서 안전하게 확인합니다.</span><span>SMART PARKING</span></footer>
+  </main>
+
+  <script>
+  (() => {
+    'use strict';
+    const stateText={EMPTY:'사용 가능',OCCUPIED:'사용 중',RESERVED:'예약됨',SELECTED:'선택 완료',UNKNOWN:'확인 중'};
+    const el={connection:document.getElementById('connection'),connectionText:document.getElementById('connectionText'),phaseLabel:document.getElementById('phaseLabel'),pageTitle:document.getElementById('pageTitle'),lead:document.getElementById('lead'),availableCount:document.getElementById('availableCount'),panelSub:document.getElementById('panelSub'),slots:document.getElementById('slots'),actionTitle:document.getElementById('actionTitle'),actionDesc:document.getElementById('actionDesc'),confirm:document.getElementById('confirmButton'),notice:document.getElementById('notice')};
+    let socket=null,retryTimer=0,retry=0,candidate='',pending=false,lastState=null;
+    const rid=()=>`entry-${Date.now()}-${Math.random().toString(16).slice(2,8)}`;
+    function connection(mode,text){el.connection.className=`connection ${mode}`;el.connectionText.textContent=text}
+    function notify(text,kind='info'){el.notice.textContent=text;el.notice.className=`notice show ${kind}`}
+    function clearNotice(){el.notice.className='notice';el.notice.textContent=''}
+    function render(s){
+      lastState=s; el.availableCount.textContent=Number.isFinite(s.available_count)?s.available_count:'–';
+      const active=s.phase==='ENTRY_ACTIVE', selected=s.phase==='SLOT_SELECTED';
+      if(active){el.phaseLabel.textContent='입차 차량 감지';el.pageTitle.innerHTML='주차할 공간을<br>선택해 주세요.';el.lead.textContent='초록색으로 표시된 공간을 누른 뒤 선택을 확정해 주세요.';el.panelSub.textContent='선택 가능한 빈자리가 활성화되었습니다.'}
+      else if(selected){el.phaseLabel.textContent='주차 안내 시작';el.pageTitle.innerHTML=`${escapeText(s.selected_slot)}으로<br>이동해 주세요.`;el.lead.textContent='안내등을 따라 이동해 주차를 완료해 주세요.';el.panelSub.textContent='선택한 주차면이 파란색으로 표시됩니다.';candidate=''}
+      else{el.phaseLabel.textContent='주차 현황';el.pageTitle.innerHTML='한눈에 확인하고,<br>편하게 주차하세요!🫡';el.lead.textContent='입구에 차량이 감지되면 이용 가능한 주차 공간을 선택할 수 있습니다.';el.panelSub.textContent='입차 전에도 현재 빈자리를 확인할 수 있습니다.';candidate=''}
+      el.slots.replaceChildren();
+      (Array.isArray(s.slots)?s.slots:[]).forEach(slot=>{
+        const b=document.createElement('button'); b.type='button'; b.className='slot'; b.dataset.state=slot.state; b.disabled=!slot.selectable||pending;
+        if(slot.selectable)b.classList.add('selectable'); if(candidate===slot.id)b.classList.add('candidate');
+        const code=document.createElement('span');code.className='slot-code';code.textContent=slot.id;
+        const status=document.createElement('span');status.className='slot-state';status.textContent=candidate===slot.id?'선택 예정':(stateText[slot.state]||'확인 중');
+        b.append(code,status);if(slot.selectable){const tag=document.createElement('span');tag.className='slot-tag';tag.textContent='선택 가능';b.append(tag)}
+        b.addEventListener('click',()=>{candidate=slot.id;clearNotice();render(lastState)});el.slots.append(b);
+      });
+      if(active){el.actionTitle.textContent=candidate?`${candidate} 주차면을 선택할까요?`:'이용할 주차면을 눌러 주세요';el.actionDesc.textContent=s.guide_ready?'선택 후 입구 게이트와 안내등이 작동합니다.':'주차 안내 장치를 준비하고 있습니다.';el.confirm.textContent=pending?'선택 확인 중…':(candidate?`${candidate} 선택 확정`:'주차면 선택하기');el.confirm.disabled=!candidate||pending||!s.guide_ready}
+      else if(selected){el.actionTitle.textContent=`${s.selected_slot} 주차면으로 안내 중입니다`;el.actionDesc.textContent='주차가 완료되면 화면은 자동으로 현황 모드로 돌아갑니다.';el.confirm.textContent='안내 중';el.confirm.disabled=true}
+      else{el.actionTitle.textContent='입차 차량을 기다리고 있습니다';el.actionDesc.textContent='빈자리 현황은 언제든 확인할 수 있습니다.';el.confirm.textContent='주차면 선택하기';el.confirm.disabled=true}
+    }
+    function escapeText(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    function handle(msg){
+      if(!msg||typeof msg!=='object')return;
+      if(msg.type==='user_parking_state'){render(msg);return}
+      if(msg.type==='entry_select_result'){pending=false;if(msg.ok){candidate='';notify(msg.message||'주차면이 배정되었습니다.','ok')}else notify(msg.message||'주차면을 선택하지 못했습니다.','error');if(lastState)render(lastState);return}
+      if(msg.type==='error'){pending=false;notify(msg.message||'요청을 처리하지 못했습니다.','error');if(lastState)render(lastState)}
+    }
+    function connect(){
+      clearTimeout(retryTimer);connection('','서버 연결 중');
+      const scheme=location.protocol==='https:'?'wss':'ws';socket=new WebSocket(`${scheme}://${location.host}/ws/user-entry`);
+      socket.onopen=()=>{retry=0;connection('online','실시간 연결됨');socket.send(JSON.stringify({type:'get_user_state',rid:rid()}))};
+      socket.onmessage=e=>{try{handle(JSON.parse(e.data))}catch(_){notify('서버 응답을 읽지 못했습니다.','error')}};
+      socket.onclose=()=>{connection('offline','연결 복구 중');pending=false;retry=Math.min(retry+1,6);retryTimer=setTimeout(connect,Math.min(10000,700*Math.pow(1.7,retry)))};
+      socket.onerror=()=>socket.close();
+    }
+    el.confirm.addEventListener('click',()=>{if(!candidate||pending||!socket||socket.readyState!==WebSocket.OPEN){notify('서버 연결을 확인해 주세요.','error');return}pending=true;clearNotice();el.confirm.disabled=true;el.confirm.textContent='선택 확인 중…';socket.send(JSON.stringify({type:'entry_select',rid:rid(),slot:candidate}))});
+    connect();
+  })();
+  </script>
+</body>
+</html>
