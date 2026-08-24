@@ -11,3 +11,14 @@ arduino_server_prompt.md
 CODEX_ANALYSIS.md
 server_arduino_protocol.md
 .vs/
+.codex-composite-test
+old_Smartparking
+VS_server/Project[0-9]
+VS_server/server
+ardu/client
+ardu/client_ver2
+ardu/ino_설명.md
+
+VS_server/server_multi/README.md
+VS_server/server_multi/GUIDE-server-says.md
+VS_server/server_multi/GUIDE-sample.md
