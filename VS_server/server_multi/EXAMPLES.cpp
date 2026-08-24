@@ -111,7 +111,7 @@ void example_send(ParkingServer& srv) {
 //   🔑 상승·하강 **둘 다** 온다. 한쪽만 쓰려면 `occupied` 로 갈라라.
 //   🔑 **첫 관측에서는 안 불린다** — 기동 직후 값은 변화가 아니라 처음 본 것이다.
 void example_occupancy(ParkingServer& srv, const std::string& spot,
-                       const std::string& module, bool occupied,
+                       const std::string& devid, const std::string& module, bool occupied,
                        const SensorMeasure& measure) {
     // 🔴 값을 쓰기 전에 **`has` 를 본다.** 없으면 `value` 는 뜻이 없다("못 쟀다"이지 0 이 아니다)
     if (measure.has) std::cout << module << " = " << measure.value << "\n";
@@ -119,7 +119,7 @@ void example_occupancy(ParkingServer& srv, const std::string& spot,
     // 🔓 **모듈 단위로 온다.** 한 자리에 센서가 둘이면 각각 불린다 —
     //   합칠지 말지는 **네 선택**이다. 한쪽만 쓰려면 아래를 켜라.
     // if (module != "A1") return;
-    (void)module;
+    (void)devid; (void)module;
     if (spot != "A1" || !occupied) return;      // 잡힐 때만(0→1)
 
     static bool ledOn = false;                  // 🔑 다음 호출까지 살아야 한다
@@ -138,8 +138,9 @@ void example_occupancy(ParkingServer& srv, const std::string& spot,
 //     점유는 계속 "찼다" 라서 ⑦은 **한 번도 안 불린다.** 거리를 보려면 여기다.
 //   ⚠ 값이 **있을 때만** 온다("못 쟀다" 는 사건이 아니다) · **자주 온다**(슬롯당 센서 수만큼)
 void example_sensor_value(ParkingServer& srv, const std::string& spot,
-                          const std::string& module, long value) {
-    (void)spot;
+                          const std::string& devid, const std::string& module,
+                          long value) {
+    (void)spot; (void)devid;
     if (module != "A1") return;             // 🔓 거르는 것은 네 몫이다
 
     srv.send("P1", "L2", value);            // 거리를 표시기에 그대로

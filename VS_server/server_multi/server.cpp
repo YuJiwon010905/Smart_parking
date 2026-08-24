@@ -118,7 +118,9 @@ struct Pending {             // 아두이노에 내려보내고 ACK 를 기다�
     uint16_t wire_rid;
     sock_t   ws_fd;          // 요청한 브라우저 (BAD_SOCK = 서버 자체 재동기화)
     std::string browser_rid;
-    std::string slot, user_id;   // user_id = **전선에 실제로 나간 값**(ASCII 0*8 또는 빈 값)
+    std::string slot;            // Server의 global spot/module 신원
+    std::string wire_slot;       // R/C/T에서 Arduino가 알아듣는 local sensor module
+    std::string user_id;         // user_id = **전선에 실제로 나간 값**(ASCII 0*8 또는 빈 값)
     std::string plate;           // 서버가 보관할 원래 값(UTF-8 번호판 등). 전선에 안 나간다
     char kind;               // 'R' | 'C' | 'T' | 'M' | 'G'
     // 🔴 `kind=='G'` 전용 — **모듈 인덱스**다. `slot` 은 사람이 읽을 자리 이름이고
@@ -325,10 +327,6 @@ ParkingServer::ParkingServer(const ParkingLot& lot) : p_(new Impl) {
 bool ParkingServer::send(const std::string& devid, const std::string& moduleName, long value) {
     return p_->srv.send_to_module(devid, moduleName, value);
 }
-bool ParkingServer::send(const std::string& moduleName, long value) {
-    Node* n = p_->srv.module_owner(moduleName);
-    return n && p_->srv.send_to_module(n->devid, moduleName, value);
-}
 ParkingServer::Batch& ParkingServer::Batch::add(const std::string& moduleName, long value) {
     items_.push_back(std::make_pair(moduleName, value));
     return *this;
@@ -350,13 +348,10 @@ bool ParkingServer::deviceReady(const std::string& devid) const {
     const Node* n = p_->srv.node_by_devid(devid);
     return n && n->reg_done && p_->srv.node_online(*n);
 }
-bool ParkingServer::moduleReady(const std::string& moduleName) const {
-    const Node* n = p_->srv.module_owner(moduleName);
-    return n && n->reg_done && p_->srv.node_online(*n);
-}
-std::string ParkingServer::moduleDevice(const std::string& moduleName) const {
-    const Node* n = p_->srv.module_owner(moduleName);
-    return n ? n->devid : std::string();
+bool ParkingServer::moduleReady(const std::string& devid, const std::string& moduleName) const {
+    const Node* n = p_->srv.node_by_devid(devid);
+    return n && n->reg_done && p_->srv.node_online(*n)
+        && p_->srv.module_registered(*n, moduleName);
 }
 bool ParkingServer::parkingSpotAvailable(const std::string& spotId) const {
     const int i = p_->srv.slot_index(spotId);

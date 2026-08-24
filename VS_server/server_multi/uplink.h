@@ -304,7 +304,7 @@
                 //   ⚠ 자리에 안 붙은 모듈은 부르지 않는다 — 화면에도 없는 것에 콜백만 가면 헷갈린다.
                 if (val_cb_ && owner_ && idx < vn.mods.size()) {
                     const std::string zid = lot.zoneOfModule(vn.devid, vn.mods[idx].first, lot_);
-                    if (!zid.empty()) val_cb_(*owner_, zid, vn.mods[idx].first, v);
+                    if (!zid.empty()) val_cb_(*owner_, zid, vn.devid, vn.mods[idx].first, v);
                 }
             }
             vframes++; vvalues += (long long)used; vmissing += (long long)miss;
@@ -469,17 +469,18 @@
             // ⚠ **탐지만 한다. 거동은 안 바꾼다.** 바로 아래 줄이 "전선 값이 유효한 자리면
             //   그걸 쓴다"인데 주석은 "전선 값을 믿지 않는다"라고 적혀 있다 — **둘이 어긋나 있고
             //   그것을 고치는 것은 거동 변경**이라 이 배포에 안 넣는다(설계 §6.1 · 루트 결정 대기).
-            if (slot != "??" && slot_index(slot) >= 0 && !p.slot.empty() && slot != p.slot) {
+            if (!p.wire_slot.empty() && slot != "??" && slot != p.wire_slot) {
                 ack_slot_mismatch++;
                 logf("!", "🔴 ACK 에코 자리 불일치 rid=" + std::to_string(rid)
-                          + " 보낸자리=" + p.slot + " 에코=" + slot
+                          + " Server spot=" + p.slot + " · 보낸 module=" + p.wire_slot
+                          + " · 에코=" + slot
                           + " — 장치 멱등 캐시 재전송 의심(arduino §25.3)");
             }
 
-            // result=3 이면 slot 은 "??" 다(§2.4). 전선의 자리 값을 믿지 않고
-            // **매핑표의 원래 자리**를 쓴다 — 상관 키는 rid 이고 원본은 서버가 들고 있다.
-            if (slot == "??" || slot_index(slot) < 0) slot = p.slot;
-            int idx = slot_index(slot);
+            // ACK은 Arduino local module name을 echo한다. Server state와 Web UI는
+            // Pending에 보존한 global spot을 사용한다. 상관 키는 rid이다.
+            const std::string server_slot = p.slot;
+            int idx = slot_index(server_slot);
             // **예약 상태를 건드리는 것은 R/C 뿐이다.** T 를 여기에 섞으면
             // 테스트 주입 ACK 가 cancel 로 취급돼 **그 칸의 예약을 지워 버린다.**
             if (result == 0 && idx >= 0 && (p.kind == 'R' || p.kind == 'C')) {
@@ -510,15 +511,15 @@
                 notify_cmd(p, (result == 0) ? CmdResult::OK : CmdResult::REJECTED, result);
             if (result == 3) {
                 dev_reject++;
-                logf("!", std::string("장치가 거절했다(result=3) — ") + p.kind + " " + slot
+                logf("!", std::string("장치가 거절했다(result=3) — ") + p.kind + " " + server_slot
                           + " rid=" + std::to_string(rid) + ". **재시도는 뜻이 없다**");
             }
-            if (p.ws_fd != BAD_SOCK) send_ack(p.ws_fd, p.browser_rid, slot, result, p.kind);
+            if (p.ws_fd != BAD_SOCK) send_ack(p.ws_fd, p.browser_rid, server_slot, result, p.kind);
             // 이음매 1: 직접 호출 → 이벤트. **같은 틱의 drain 이 같은 일을 한다**(2481행).
             // 한 틱에 ACK 가 여러 건 겹치면 기록·화면이 건별 → 1회로 접힌다 — 이미 옮긴
             // 3종과 같은 성질이고, 브라우저가 보는 최종 상태는 같다.
-            emit_dev_ack(park_dev, rid, (uint8_t)result,
-                         std::string("ACK ") + p.kind + " " + slot
+            emit_dev_ack(p.devid, rid, (uint8_t)result,
+                         std::string("ACK ") + p.kind + " " + server_slot
                          + " result=" + std::to_string(result));
         }
         else {

@@ -170,6 +170,7 @@ static bool cmdExitGate(uint32_t arg){
 #define US1_TRIG        7        // 🔓 Trig — 출력. 출처: 사용자 "에코가 4번핀 트리거 2번핀"
 #define US1_ECHO        8        // 🔓 Echo — 입력
 #define US_NEAR_CM     10      // 이보다 가까우면 "차가 있다"
+
 // CODEX FIX: 타임아웃은 현재 10cm 문턱에서 계산한다.
 // 왕복 µs ÷ 58 = cm, 여유 2배이므로 10cm 기준 1,160µs다.
 //   ⚠ 4m(25,000µs)까지 기다리면 **무응답 슬롯마다 25ms 를 버린다** — 슬롯(1,200ms)의 2%가

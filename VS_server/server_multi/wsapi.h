@@ -288,7 +288,7 @@
             send_err(fd, rid, "bad_request", "user_id 가 너무 깁니다");
             return;
         }
-        const Node* slot_owner = module_owner(slot);
+        const Node* slot_owner = zone_sensor_owner(slot);
         if (!slot_owner || !slot_owner->reg_done || !node_online(*slot_owner)) {
             send_err(fd, rid, "device_offline", "센서가 연결되어 있지 않습니다");
             return;

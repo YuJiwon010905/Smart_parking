@@ -1,4 +1,4 @@
-/* parking_p2.ino — P2 multi-device test node: IR A4 + LED L4 */
+/* parking_p2.ino — P2 multi-device node: local IR A1 + LED L1 */
 #include <SoftwareSerial.h>
 #include <avr/pgmspace.h>
 #include <avr/wdt.h>
@@ -14,16 +14,16 @@
 static_assert(sizeof(DEVICE_ID) > 1 && sizeof(DEVICE_ID) <= 9,
               "DEVICE_ID must be 1..8 chars");
 
-static const uint8_t PIN_IR_A4 = 2;
-static const uint8_t PIN_LED_L4 = 11;
+static const uint8_t PIN_IR_A1 = 2;
+static const uint8_t PIN_LED_L1 = 11;
 
-static bool readIR4() {
+static bool readIR1() {
   static DigitalDebounceState state = {false, false, false, 0};
-  return readDebouncedActiveLow(PIN_IR_A4, state);
+  return readDebouncedActiveLow(PIN_IR_A1, state);
 }
 
-static bool cmdLed4(uint32_t arg) {
-  digitalWrite(PIN_LED_L4, arg ? HIGH : LOW);
+static bool cmdLed1(uint32_t arg) {
+  digitalWrite(PIN_LED_L1, arg ? HIGH : LOW);
   return true;
 }
 
@@ -52,15 +52,16 @@ void setup() {
 
   // Active-low IR module. If the physical sensor requires an internal pull-up,
   // change INPUT to INPUT_PULLUP after checking its output circuit.
-  pinMode(PIN_IR_A4, INPUT);
-  pinMode(PIN_LED_L4, OUTPUT);
-  digitalWrite(PIN_LED_L4, LOW);
+  pinMode(PIN_IR_A1, INPUT);
+  pinMode(PIN_LED_L1, OUTPUT);
+  digitalWrite(PIN_LED_L1, LOW);
 
-  node.sensor("A4").on(readIR4);
-  node.actuator("L4").on(cmdLed4);
+  // P1에도 A1/L1이 있지만 전역 신원은 P2/A1, P2/L1이므로 충돌하지 않는다.
+  node.sensor("A1").on(readIR1);
+  node.actuator("L1").on(cmdLed1);
 
 #if DEBUG
-  Serial.println(F("[P2] A4 L4 registered"));
+  Serial.println(F("[P2] local A1 L1 registered"));
 #endif
 }
 

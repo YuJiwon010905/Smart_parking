@@ -384,7 +384,8 @@
         //   (`dispatch_gate` 는 자리 id, `send_to_module` 은 모듈 이름). **겸한 칸을 믿지 않는다.**
         bool pending = false;
         for (std::map<uint16_t, Pending>::const_iterator it = pend.begin(); it != pend.end(); ++it)
-            if (it->second.kind == 'G' && it->second.mod_idx == mi) pending = true;
+            if (it->second.kind == 'G' && it->second.devid == devid
+                && it->second.mod_idx == mi) pending = true;
         if (pending)      { o << ",\"confirmed\":\"pending\""; return; }
         if (!known)       { o << ",\"confirmed\":\"unknown\""; return; }
 

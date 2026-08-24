@@ -46,7 +46,7 @@ struct SensorMeasure {
 
 // 🔴 **자리 점유가 바뀌면 불린다.** `onCommandResult` 와 같은 계열이다 —
 //   기여자는 훅 하나를 더 배우는 것이 아니라 **같은 모양을 한 번 더 쓴다.**
-//   `spot`     : 자리 id · `module` : **그 값을 말한 센서 모듈 이름**
+//   `spot`     : 자리 id · `devid,module` : **그 값을 말한 센서의 복합 주소**
 //   `occupied` : 바뀐 **뒤**의 값. 상승(비었다→찼다)과 하강(찼다→비었다) **둘 다** 온다
 //
 // 🔴 **모듈 단위로 불린다.** 한 자리에 센서가 둘이면 **각각** 온다 —
@@ -65,10 +65,12 @@ struct SensorMeasure {
 // ⚠ **자주 불린다** — 슬롯당 센서 수만큼(초당 약 k/1.2회). 여기서 무거운 일을 하면 박자를 먹는다.
 //   거르고 싶으면 **기여자가 거른다.** 서버가 문턱을 정하면 그 문턱을 누가 정하는지가 또 빈 자리가 된다.
 typedef void (*SensorValueFn)(ParkingServer& srv, const std::string& spot,
-                              const std::string& module, long value);
+                              const std::string& devid, const std::string& module,
+                              long value);
 
 typedef void (*OccupancyFn)(ParkingServer& srv, const std::string& spot,
-                            const std::string& module, bool occupied,
+                            const std::string& devid, const std::string& module,
+                            bool occupied,
                             const SensorMeasure& measure);
 
 struct SpotBehavior {

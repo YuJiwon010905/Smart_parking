@@ -337,8 +337,8 @@
     //   전에는 충돌 로그를 결속 안에서 찍었다 — 그러면 지형이 로그 형식을 알게 된다.
     // 🔴🔴 **한 장치 안에서 모듈 이름이 고유한가** (2026-08-19 · socket 이 찾았다)
     //
-    //   위 `mod_name_conflict` 는 **노드 *사이*** 충돌만 본다(두 노드가 같은 자리를 주장).
-    //   🔴 **한 노드 안의 중복은 아무도 안 봤다.** 그런데 web 은 REQ-0179 §① 에서
+    //   다른 노드의 같은 module name은 정상이다. 다만 **한 노드 안의 중복**은
+    //   `(devid,name)` 복합 키 자체를 애매하게 만든다. web 은 REQ-0179 §① 에서
     //     *"모듈의 전역 신원은 `(devid, name)` 복합 키"* 라고 정하고 **이미 그렇게 구현했다.**
     //   → **중복이 있으면 그 키가 오늘 이미 애매하다.** 화면이 두 모듈 중 하나를 임의로 집는다.
     //   ⚠ **증상이 "가끔 엉뚱한 모듈이 보인다"라서 결함으로 안 보인다.**
@@ -397,8 +397,15 @@
     //     콜백이 `LD`(OG)를 켜면 그 에코 비트가 오르지만 **여기 안 들어오므로 점유가 안 움직인다.**
     //     근거를 주석이 아니라 시험으로도 박아 뒀다(음성 대조).
     // 이름을 같이 준다. **순서는 선언 순서**(`z.modules`) — 재현 가능해야 한다.
-    void zone_sensors(const Zone& z,
-                      std::vector<std::pair<std::string, SensorReading> >& out) const {
+    struct ZoneSensorReading {
+        std::string devid;
+        std::string module;
+        SensorReading reading;
+        ZoneSensorReading(const std::string& d, const std::string& m,
+                          const SensorReading& r) : devid(d), module(m), reading(r) {}
+    };
+
+    void zone_sensors(const Zone& z, std::vector<ZoneSensorReading>& out) const {
         for (size_t m = 0; m < z.modules.size(); m++) {
             const Node* mn = node_by_devid(z.modules[m].first);
             int mi = -1;
@@ -409,7 +416,8 @@
             if (!mn || mn->mods[mi].second.empty() || mn->mods[mi].second[0] != 'I') continue;
             const bool known = (mi < mn->mod_bits_n);
             const bool val   = known && mn->mod_bits[mi];
-            out.push_back(std::make_pair(z.modules[m].second, SensorReading(known, val)));
+            out.push_back(ZoneSensorReading(z.modules[m].first, z.modules[m].second,
+                                           SensorReading(known, val)));
         }
     }
 
@@ -500,14 +508,17 @@
             // aggregation remains restricted to parking zones elsewhere.
             // 🔴 **모듈 단위다.** 자리 하나로 합치지 않는다 — 합칠지는 기여자가 정한다.
             //   ⚠ 순서는 **선언 순서**(`zone_sensors` 가 그렇게 준다). 재현 가능해야 한다.
-            std::vector<std::pair<std::string, SensorReading> > ms;
+            std::vector<ZoneSensorReading> ms;
             zone_sensors(z, ms);
             for (size_t m = 0; m < ms.size(); m++) {
                 // 🔑 **값을 아직 못 받은 모듈은 판정하지 않는다.** `known=false` 를 `false` 로
                 //   읽으면 "비었다"가 되고, 그건 모름을 거짓으로 무너뜨리는 것이다.
-                if (!ms[m].second.known) continue;
-                const std::string key = z.id + "\t" + ms[m].first;
-                const bool now = ms[m].second.value;
+                if (!ms[m].reading.known) continue;
+                // 모듈의 전역 신원은 `(devid,module)` 이다. 자리 id나
+                // module name 단독으로 직전 값을 보관하면 다른 Arduino의
+                // 동명 모듈 변화가 서로를 덮어쓴다.
+                const std::string key = ms[m].devid + "\t" + ms[m].module;
+                const bool now = ms[m].reading.value;
                 std::map<std::string, bool>::iterator it = occ_prev_.find(key);
                 bool first = (it == occ_prev_.end());
                 if (first) {
@@ -525,14 +536,11 @@
                 }
                 occ_change_n_++;                      // 🔑 콜백을 등록 안 해도 센다
                 logf("=", std::string(first ? "센서 초기값 " : "센서 변화 ")
-                          + z.id + " · 모듈 " + ms[m].first
+                          + z.id + " · 모듈 " + ms[m].devid + "/" + ms[m].module
                           + (now ? " = 감지" : " = 미감지"));
                 if (occ_cb_ && owner_) {
-                    // 🔑 같은 이름이 여러 devid 에 있을 수 있으므로 **자리의 선언에서** 짝을 찾는다
-                    std::string dv;
-                    for (size_t q = 0; q < z.modules.size(); q++)
-                        if (z.modules[q].second == ms[m].first) { dv = z.modules[q].first; break; }
-                    occ_cb_(*owner_, z.id, ms[m].first, now, measure_of(dv, ms[m].first));
+                    occ_cb_(*owner_, z.id, ms[m].devid, ms[m].module, now,
+                            measure_of(ms[m].devid, ms[m].module));
                 }
             }
         }
@@ -550,16 +558,6 @@
     void bind_modules(Node& n) {
         Lot::BindResult r = lot.bind(n.devid, n.mods, lot_);
         mod_seen_ += (long long)n.mods.size();   // 🔑 분모 — 시도한 만큼 센다
-        for (size_t i = 0; i < r.conflicts.size(); i++) {
-            mod_name_conflict++;
-            if (mod_name_conflict <= 3 || mod_name_conflict % 100 == 0)
-                logf("🔴", "모듈 이름 충돌 — 자리 " + r.conflicts[i].first + " 의 이름 '"
-                           + r.conflicts[i].second + "' 을 노드 "
-                           + (n.devid.empty() ? std::string("(미승격)") : n.devid)
-                           + " 가 다시 주장한다. **먼저 잡은 노드를 유지하고 이것은 결속하지 않는다.**"
-                             " 누적 " + std::to_string(mod_name_conflict)
-                           + " · 자리 결속이 아직 이름 기반이라 생기는 한계다(REQ-0260)");
-        }
         check_dup_names(n);
         // 🔴 **센서가 하나도 없는 주차 자리** — 조립 시점에서 여기로 **옮겨 온 검사**다(v2).
         //   `module()` 하나로 합치면서 **선언만 보고는 센서인지 알 수 없게 됐다.**
@@ -600,14 +598,16 @@
                 std::string known;
                 for (size_t z = 0; z < lot.zones().size() && z < 12; z++)
                     known += (z ? ", " : "") + lot.zones()[z].id;
-                logf("🔴", "모듈 `" + r.unbound[i].second + "` (idx "
+                logf("🔴", "모듈 `" + n.devid + "/" + r.unbound[i].second + "` (idx "
                            + std::to_string(r.unbound[i].first) + ", 노드 "
                            + (n.devid.empty() ? std::string("(미승격)") : n.devid)
-                           + ") 은 **어떤 자리에도 안 붙는다** — 지형에 그 이름이 없다. "
+                           + ") 은 **어떤 자리에도 안 붙는다** — 조립 표에 그 "
+                             "`(Arduino ID,module)` 쌍이 없다. "
                              "**등록은 성공했고 하행도 정상이지만 이 모듈은 화면에 안 나타난다.** "
                              "지금 지형의 자리: " + known
-                           + " · 자리에 붙이려면 그 자리 id 와 같은 이름을 쓰거나(현행 규칙) "
-                             "대장에 할당을 걸어라(4단계) · 누적 " + std::to_string(mod_unbound));
+                           + " · `lot.cpp`에 `.module(\"" + n.devid + "\",\""
+                           + r.unbound[i].second + "\")`로 선언해라 · 누적 "
+                           + std::to_string(mod_unbound));
             }
         }
                 if (r.changed) bump_epoch("노드 " + n.devid + " 등록 결속");
@@ -635,31 +635,59 @@
         return v;
     }
 
-    Node* module_owner(const std::string& module) {
+    // 모듈 주소는 항상 `(devid,module)` 이다. 모듈명만으로 전체
+    // node를 훑는 owner 재생성은 하지 않는다.
+    bool module_registered(const Node& n, const std::string& module) const {
+        for (size_t k = 0; k < n.mods.size(); k++)
+            if (n.mods[k].first == module) return true;
+        return false;
+    }
+
+    // 자리 단위 R/C/T 명령은 조립 표에 **복합 주소로 결속된 센서**의
+    // Arduino로 보낸다. 서로 다른 Arduino의 동명 모듈은 충돌이 아니다.
+    Node* zone_sensor_owner(const std::string& zone_id, std::string* local_module = 0) {
+        Zone* z = zone_find(zone_id);
+        if (!z) return 0;
         Node* found = 0;
-        std::vector<Node*> ns = all_nodes();
-        for (size_t i = 0; i < ns.size(); i++) {
-            for (size_t k = 0; k < ns[i]->mods.size(); k++) {
-                if (ns[i]->mods[k].first != module) continue;
-                if (found && found != ns[i]) {
-                    logf("!!", "module owner 충돌 — " + module + " (" + found->devid
-                                 + ", " + ns[i]->devid + ")");
+        std::string found_module;
+        for (size_t m = 0; m < z->modules.size(); m++) {
+            Node* n = node_by_devid(z->modules[m].first);
+            if (!n) continue;
+            for (size_t k = 0; k < n->mods.size(); k++) {
+                if (n->mods[k].first != z->modules[m].second) continue;
+                if (n->mods[k].second.empty() || n->mods[k].second[0] != 'I') break;
+                if (found && found != n) {
+                    logf("!", "자리 `" + zone_id
+                              + "` 의 예약 대상 Arduino가 둘 이상이다 — 조립 표에서 "
+                                "R/C mirror를 담당할 센서 node를 하나로 구성해라");
                     return 0;
                 }
-                found = ns[i];
+                if (!found) {
+                    found = n;
+                    found_module = z->modules[m].second;
+                }
+                break;
             }
         }
+        if (found && local_module) *local_module = found_module;
         return found;
     }
-    const Node* module_owner(const std::string& module) const {
+
+    const Node* zone_sensor_owner(const std::string& zone_id) const {
+        const Zone* z = lot.find(zone_id);
+        if (!z) return 0;
         const Node* found = 0;
-        std::vector<const Node*> ns = all_nodes();
-        for (size_t i = 0; i < ns.size(); i++)
-            for (size_t k = 0; k < ns[i]->mods.size(); k++) {
-                if (ns[i]->mods[k].first != module) continue;
-                if (found && found != ns[i]) return 0;
-                found = ns[i];
+        for (size_t m = 0; m < z->modules.size(); m++) {
+            const Node* n = node_by_devid(z->modules[m].first);
+            if (!n) continue;
+            for (size_t k = 0; k < n->mods.size(); k++) {
+                if (n->mods[k].first != z->modules[m].second) continue;
+                if (n->mods[k].second.empty() || n->mods[k].second[0] != 'I') break;
+                if (found && found != n) return 0;
+                found = n;
+                break;
             }
+        }
         return found;
     }
 

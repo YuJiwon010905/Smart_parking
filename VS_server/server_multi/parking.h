@@ -211,9 +211,6 @@ public:
     // ⚠ 반환 `true` 는 **"전선 큐에 넣었다"** 이지 "수행됐다"가 아니다.
     //   실제 수행은 장치 ACK 과 다음 상태 프레임이 답한다.
     bool send(const std::string& devid, const std::string& moduleName, long value);
-    // MULTI: D 등록에서 module의 현재 owner를 찾아 보낸다. 이름이 없거나
-    // 둘 이상의 online node가 같은 이름을 주장하면 false다.
-    bool send(const std::string& moduleName, long value);
 
     // ── 묶음 하행 ───────────────────────────────────────────────────────────
     //
@@ -273,8 +270,9 @@ public:
     //
     //   ```
     //   void onOccupancy(ParkingServer& srv, const std::string& spot,
-    //                    const std::string& module, bool occupied) {
-    //       if (module != "A1") return;                // 🔓 원하는 센서만 골라 쓴다
+    //                    const std::string& devid, const std::string& module,
+    //                    bool occupied) {
+    //       if (devid != "P1" || module != "A1") return; // 복합 주소로 고른다
     //       if (occupied) srv.send("P1", "LD", 1);     // 다른 장치에 지시해도 된다
     //   }
     //   srv.onOccupancyChanged(onOccupancy);
@@ -294,8 +292,8 @@ public:
     //
     //   ```
     //   void onValue(ParkingServer& srv, const std::string& spot,
-    //                const std::string& module, long value) {
-    //       if (module != "A1") return;
+    //                const std::string& devid, const std::string& module, long value) {
+    //       if (devid != "P1" || module != "A1") return;
     //       srv.send("P1", "L2", value);        // 거리 그대로 표시기에
     //   }
     //   srv.onSensorValue(onValue);
@@ -323,8 +321,8 @@ public:
     //   안 붙었으면 `send()` 가 `false` 를 내고 로그에 *"노드 `P1` 를 모른다"* 가 찍힌다.
     //   ⚠ **접속만으로는 부족하다.** 등록(`D`)이 끝나야 모듈 이름을 풀 수 있다.
     bool deviceReady(const std::string& devid) const;
-    bool moduleReady(const std::string& moduleName) const;
-    std::string moduleDevice(const std::string& moduleName) const;
+    // 🔑 준비 여부도 module name 단독이 아닌 복합 주소로 묻는다.
+    bool moduleReady(const std::string& devid, const std::string& moduleName) const;
 
     // CODEX FIX: server-authoritative availability used by the entrance
     // controller. A spot is available only when neither occupied nor reserved.
@@ -373,10 +371,12 @@ private:
 void buildLot(ParkingLot& lot);              // ① 주차장을 조립한다
 void onTick(ParkingServer& srv);             // ② 한 박자마다 — 명령을 여기서 낸다
 void onCmdResult(const CmdResult& r);        // ③ 명령 결과 — 성공 / 거절 / 무응답
-void onOccupancy(ParkingServer& srv, const std::string& spot, const std::string& module,
-                 bool occupied, const SensorMeasure& measure);  // ④ 점유 변화(모듈 단위 · 값 포함)
+void onOccupancy(ParkingServer& srv, const std::string& spot, const std::string& devid,
+                 const std::string& module, bool occupied,
+                 const SensorMeasure& measure);  // ④ 점유 변화(복합 모듈 주소 · 값 포함)
 void onSensorValue(ParkingServer& srv, const std::string& spot,
-                   const std::string& module, long value);      // ⑤ 값이 올 때마다
+                   const std::string& devid, const std::string& module,
+                   long value);      // ⑤ 값이 올 때마다
 // CODEX FIX: server-side reset hook used by wsapi.h.
 void onControllerReset(ParkingServer& srv);
 

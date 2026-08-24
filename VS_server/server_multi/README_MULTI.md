@@ -1,44 +1,49 @@
-# Multi-Arduino Server Copy
+# Multi-Arduino Server
 
-이 디렉터리는 `VS_server/server`를 보존한 채 만든 다중 Arduino 구현 사본이다.
+`VS_server/server_multi`는 여러 Arduino가 한 서버에 동시에 연결되는 구현이다.
+
+## 식별자 원칙
+
+모듈의 유일한 주소는 `(Arduino ID, module name)` 복합 키다.
+
+```text
+P1/A1 != P2/A1
+P1/L1 != P2/L1
+```
+
+모듈명을 전체 Arduino에서 고유하게 다시 만들지 않는다. `lot.cpp`가 각 자리에 실제 복합 주소를 선언한다.
+
+```cpp
+lot.spot("A1").module("P1", "A1").module("P1", "L1");
+lot.spot("A4").module("P2", "A1").module("P2", "L1");
+```
+
+## 현재 Arduino 구성
+
+```text
+P1: A1, A2, A3, U1, U2, ED, XD, L1, L2, L3
+P2: A1, L1
+```
+
+P2의 로컬 `A1/L1`은 서버 조립표에서 전역 주차면 `A4`의 센서와 안내등으로 결속된다.
 
 ## Build
-
-Visual Studio에서 `server.vcxproj`를 열거나 Developer PowerShell에서 다음을 실행한다.
 
 ```powershell
 msbuild server.vcxproj /t:Rebuild /p:Configuration=Debug /p:Platform=x64
 ```
 
-## Runtime ownership
-
-`lot.cpp`는 device를 고정하지 않는다.
-
-```cpp
-lot.spot("A1").module("A1").module("L1");
-```
-
-각 Arduino가 보내는 `D` registration으로 실제 `(devid,module)` 결속을 만든다. Module 이름은 전체 online node 사이에서 고유해야 한다.
-
-## Current test sketches
-
-```text
-ardu/parking_p1: A1, A2, A3, U1, U2, ED, XD, L1, L2, L3
-ardu/parking_p2: A4, L4
-ardu/parking_p3: optional previous example (not required for the two-board connection test)
-```
-
-P1 original + P2 A4/L4 연결·등록 시험용 구성이다. 현재 `lot.cpp`는 여전히 A1~A5/L1~L5 5면 자동 controller이므로 A5/L5가 없는 상태에서는 자동 입차가 보류된다. 자동 입차 왕복까지 시험하려면 active slot을 4면으로 바꾸는 별도 `lot.cpp` 변경이 필요하다.
-
-## Verified
+## 2026-08-24 검증
 
 ```text
 MSVC Debug x64 rebuild: PASS
-Arduino Uno compile P1/P2/P3: PASS
-P1/P2/P3 simultaneous D/S registration: PASS
-Dynamic A1~A5/U1/U2 binding: PASS
-Device-targeted G routing: PASS
-Device-matched ACK handling: PASS
-Persistence JSON devices[]: PASS
-Hardware test: NOT PERFORMED
+Arduino Uno P1 compile: PASS
+Arduino Uno P2 compile: PASS
+Synthetic P1/A1 + P2/A1 simultaneous registration: PASS
+Synthetic P1/L1 + P2/L1 device-targeted G routing: PASS
+Synthetic global A4 -> P2 local A1 R/ACK mapping: PASS
+Physical hardware test: NOT PERFORMED
+Physical integration test: NOT PERFORMED
 ```
+
+상세 수정 내역은 저장소 루트의 `COMPOSITE_MODULE_ID_FIX.md`를 참조한다.

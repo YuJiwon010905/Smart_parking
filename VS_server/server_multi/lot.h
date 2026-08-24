@@ -34,14 +34,20 @@ public:
             if (zones_[i].id == id) return &zones_[i];
         return 0;
     }
+    const Zone* find(const std::string& id) const {
+        for (size_t i = 0; i < zones_.size(); i++)
+            if (zones_[i].id == id) return &zones_[i];
+        return 0;
+    }
 
     // ── 결속 규칙 — **어느 센서가 어느 자리인가** ───────────────────────────
     // 표(조립 API)가 있으면 **표가 답한다.** 없으면 이름 규칙으로 떨어진다.
     // 🔑 표가 생기면 *"B3 은 A3 의 둘째 센서"* 라는 **추측이 사실로 바뀐다.**
     // 🔴 **`devid` 를 같이 받는다** (2026-08-19). 조립 표가 장치를 못 박을 수 있게 됐다.
     //   `Attach::devid` 가 비어 있으면 **아무 장치나** — 1인자 선언이 그 뜻이다.
-    // ⚠ **첫 번째로 맞는 것을 돌려준다.** 같은 이름이 두 자리에 있으면 뒤엣 자리는 못 받는다 —
-    //   그래서 `validate_assembly()` 가 기동 때 그것을 말한다.
+    // ⚠ **`(devid, name)` 전체가 맞는 것을 돌려준다.** 모듈 이름만으로
+    //   다른 Arduino의 모듈을 잡지 않는다. `Attach::devid` 가 빈 1인자
+    //   선언만 명시적 wildcard로 취급한다.
     std::string zoneOfModule(const std::string& devid, const std::string& nm,
                              const ParkingLot* table) const {
         if (table && !table->empty()) {
@@ -54,7 +60,10 @@ public:
                     if (!at.devid.empty() && at.devid != devid) continue;
                     return as[i].id;
                 }
-            return nm;                       // 표에 없는 이름 — 자기 이름으로 찾아본다
+            // 조립 표가 있으면 표에 없는 복합 주소를 자리 id로 추측하지 않는다.
+            // 예: P2/A1이 선언되지 않았는데 모듈명 A1만 보고 자리 A1에 붙이면
+            // P1/A1과 P2/A1을 구분하는 원래 주소 규칙이 깨진다.
+            return std::string();
         }
         return nameRule(nm);
     }
@@ -75,7 +84,6 @@ public:
     //   그래야 이 클래스가 로그 형식을 모르고, 부르는 쪽이 얼마나 크게 알릴지 정한다.
     struct BindResult {
         bool changed;                                        // 지형이 바뀌었나(판을 올릴 이유)
-        std::vector<std::pair<std::string, std::string> > conflicts;  // (자리 id, 이름)
         // 🔴🔴 **어느 자리에도 안 붙은 모듈** — (idx, 이름). 2026-08-19 신설
         //   전에는 `if (!z) continue;` 로 **조용히 건너뛰었다.** 그래서 기여자가 이름을
         //   잘못 쓰면 **등록은 성공하고 자리에는 아무것도 안 붙고 아무도 안 알려 줬다.**
@@ -92,14 +100,12 @@ public:
             Zone* z = find(zoneOfModule(devid, mods[i].first, table));
             if (!z) { r.unbound.push_back(std::make_pair(i, mods[i].first)); continue; }
             std::pair<std::string, std::string> key(devid, mods[i].first);
-            bool dup = false, takenByOther = false;
+            bool dup = false;
             for (size_t k = 0; k < z->modules.size(); k++) {
                 if (z->modules[k] == key) dup = true;
-                else if (z->modules[k].second == key.second) takenByOther = true;
             }
-            // 🔴 **먼저 잡은 노드를 유지한다.** 둘 다 받으면 그 자리 값이 어느 노드 것인지 못 가르고,
-            //   조용히 덮으면 뒤엣것이 앞엣것을 지워 원인을 못 찾는다. `first-S-wins` 와 같은 규율.
-            if (takenByOther) { r.conflicts.push_back(std::make_pair(z->id, key.second)); continue; }
+            // 모듈 이름이 같아도 devid 가 다르면 다른 모듈이다.
+            // 유일한 중복은 같은 `(devid, name)` 쌍이 다시 들어온 경우다.
             if (!dup) { z->modules.push_back(key); r.changed = true; }
         }
         return r;

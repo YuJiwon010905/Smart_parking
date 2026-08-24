@@ -234,8 +234,8 @@
     long long rid_exhausted;           // 🔴 pend 가 공간을 다 먹어 발행 자체를 못 한 횟수
     long long ack_unknown_rid;         // pend 에 없는 rid 의 ACK — 늦은 ACK/재전송 중복
     long long ack_slot_mismatch;       // 🔴 ACK 에코 자리 ≠ 서버가 보낸 자리 (멱등 캐시 서명)
-    long long mod_name_conflict;       // 🔴 다른 노드가 이미 잡힌 모듈 이름을 다시 주장 (REQ-0260 전까지의 한계)
-    // 🔴 **한 장치 *안* 의 이름 중복.** 위 칸은 노드 *사이* 만 본다 — 다른 사건이다.
+    // 🔴 **한 장치 *안* 의 이름 중복.** 다른 Arduino의 동명 모듈은 허용하지만,
+    //   같은 Arduino 안의 중복은 복합 키도 구분할 수 없으므로 다른 사건이다.
     //   web REQ-0179 §① 이 `(devid,name)` 을 전역 신원으로 쓰므로 **1 이상이면 그 키가 애매하다.**
     long long mod_dup_name;
     // 🔴 **어느 자리에도 안 붙은 모듈 수.** 전에는 조용히 건너뛰었다 —

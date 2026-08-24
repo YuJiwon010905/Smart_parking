@@ -101,7 +101,7 @@
                rid_cursor(1), rid_reserved_to(0), rid_persist_on(false),
                rid_rel_seq(0),
                rid_alloc_n(0), rid_skips(0), rid_forced(0), rid_exhausted(0),
-               ack_unknown_rid(0), ack_slot_mismatch(0), mod_name_conflict(0), mod_dup_name(0), mod_unbound(0), mod_seen_(0), asm_warn_(0), batch_seq_(0), batch_deferred(0), devid_example_(0), sensor_split_now(0), not_reservable_n(0),
+               ack_unknown_rid(0), ack_slot_mismatch(0), mod_dup_name(0), mod_unbound(0), mod_seen_(0), asm_warn_(0), batch_seq_(0), batch_deferred(0), devid_example_(0), sensor_split_now(0), not_reservable_n(0),
                base_valid(false), test_armed(false),
                cmd_cb_(0), cb_ok_(0), cb_rejected_(0), cb_noanswer_(0),
                occ_cb_(0), val_cb_(0), owner_(0), occ_change_n_(0),
@@ -378,8 +378,6 @@
            + (asm_warn_ > 0 ? " 🔴" : "");
         s += " · 예시devid " + std::to_string(devid_example_)
            + (devid_example_ > 0 ? " 🔴" : "");
-        s += " · 이름충돌 " + std::to_string(mod_name_conflict)
-           + (mod_name_conflict > 0 ? " 🔴" : "");
         // 🔴 **화면 수를 찍는다** (2026-08-19). `S` 처리 안에서 `push_snapshot`·`state` 방송이 돌고
         //   그 비용은 **붙어 있는 화면 수에 비례**한다. 창 M 에서 하행 송신 지연이
         //   `≥2ms 9.4% → 40.9%` 로 늘었는데 **그 축이 아무 데도 안 남아서 원인을 못 갈랐다.**

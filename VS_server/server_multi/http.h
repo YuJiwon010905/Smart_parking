@@ -257,7 +257,7 @@
             logf("!", "빈자리 없음 — " + plate + " 배정 실패. 차단기를 열 자리가 없다");
             return;
         }
-        const Node* target_node = module_owner(SLOT_ID[f]);
+        const Node* target_node = zone_sensor_owner(SLOT_ID[f]);
         if (!target_node || !target_node->reg_done || !node_online(*target_node)) {
             logf("!", "아두이노 미연결 — " + plate + " 배정 보류(예약을 내릴 수 없다)");
             return;
@@ -311,4 +311,3 @@
         atomic_write_log("[]\n");     // 쓰기 경로는 원자적 교체 하나뿐이다
         logf("=", "data_log.json 이 없어 빈 배열로 만들었다");
     }
-

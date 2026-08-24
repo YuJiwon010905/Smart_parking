@@ -12,9 +12,10 @@
     // ---------- 아두이노로 요청 내리기
     void dispatch(char kind, sock_t ws_fd, const std::string& brid,
                   const std::string& slot, const std::string& uid) {
-        Node* target = module_owner(slot);
+        std::string wire_slot;
+        Node* target = zone_sensor_owner(slot, &wire_slot);
         if (!target) {
-            logf("!", "예약/취소 대상 module owner 없음 — " + slot);
+            logf("!", "예약/취소 대상 복합 센서 주소 없음 — " + slot);
             if (ws_fd != BAD_SOCK) send_err(ws_fd, brid, "module_absent", "해당 주차면 Arduino를 찾을 수 없습니다");
             return;
         }
@@ -27,6 +28,7 @@
         p.devid = target->devid;
         p.wire_rid = rid; p.ws_fd = ws_fd; p.browser_rid = brid;
         p.slot = slot;
+        p.wire_slot = wire_slot;
         p.plate = uid;                       // 서버가 기억할 원본(번호판일 수 있다)
         p.user_id = wire_userid(uid);        // 전선에 나갈 값 — ASCII 0*8 아니면 빈 값
         p.kind = kind;
@@ -37,8 +39,8 @@
         // **p.user_id 를 쓴다. 인자 uid 를 쓰면 안 된다** — uid 는 번호판일 수 있고
         // 그러면 UTF-8 이 그대로 전선에 나가 §2.1(ASCII 전용)과 §2.3 을 위반한다.
         // 실제로 그 버그를 냈다: `R,1,B2,980가4568,F7` 이 나가 아두이노가 죽었다.
-        if (kind == 'R') snprintf(buf, sizeof(buf), "R,%u,%s,%s,", rid, slot.c_str(), p.user_id.c_str());
-        else             snprintf(buf, sizeof(buf), "C,%u,%s,", rid, slot.c_str());
+        if (kind == 'R') snprintf(buf, sizeof(buf), "R,%u,%s,%s,", rid, p.wire_slot.c_str(), p.user_id.c_str());
+        else             snprintf(buf, sizeof(buf), "C,%u,%s,", rid, p.wire_slot.c_str());
         // 🔑 **전송하지 않는다. 큐에 담는다.** 나가는 것은 다음 창(= 다음 `S` 도착)이다.
         if (!enqueue_down(pend[rid], build_line(buf), true, false)) { pend.erase(rid); rid_release(rid); }
     }
@@ -50,11 +52,12 @@
         uint16_t rid = alloc_rid();
         if (rid == RID_NONE) { logf("!", "rid 공간 고갈 — T 발행 포기"); return; }
         Pending p;
-        Node* target = (slot != "??") ? module_owner(slot) : &park;
+        std::string wire_slot = "??";
+        Node* target = (slot != "??") ? zone_sensor_owner(slot, &wire_slot) : &park;
         if (!target) { rid_release(rid); return; }
         p.devid = target->devid;
         p.wire_rid = rid; p.ws_fd = ws_fd; p.browser_rid = brid;
-        p.slot = slot; p.user_id = tval; p.kind = 'T';
+        p.slot = slot; p.wire_slot = wire_slot; p.user_id = tval; p.kind = 'T';
         p.top = op;
         p.sent_ms = now_ms(); p.tries = 1;
         pend[rid] = p;
@@ -337,7 +340,7 @@
     static std::string test_prefix(const Pending& p) {
         char buf[64];
         snprintf(buf, sizeof(buf), "T,%u,%c,%s,%s,",
-                 p.wire_rid, p.top, p.slot.c_str(), p.user_id.c_str());
+                 p.wire_rid, p.top, p.wire_slot.c_str(), p.user_id.c_str());
         return std::string(buf);
     }
 
@@ -423,10 +426,10 @@
             else if (p.kind == 'M') line = sim_prefix(p);  // 재전송이 두 걸음이 되면 안 된다(§12B.4)
             else if (p.kind == 'T') line = test_prefix(p); // 테스트도 같은 wire_rid 로 재전송
             else if (p.kind == 'R') {
-                snprintf(buf, sizeof(buf), "R,%u,%s,%s,", p.wire_rid, p.slot.c_str(), p.user_id.c_str());
+                snprintf(buf, sizeof(buf), "R,%u,%s,%s,", p.wire_rid, p.wire_slot.c_str(), p.user_id.c_str());
                 line = buf;
             } else {
-                snprintf(buf, sizeof(buf), "C,%u,%s,", p.wire_rid, p.slot.c_str());
+                snprintf(buf, sizeof(buf), "C,%u,%s,", p.wire_rid, p.wire_slot.c_str());
                 line = buf;
             }
             logf("↻", "재전송 " + std::to_string(p.tries) + "/" + std::to_string(ACK_MAX_TRIES)
