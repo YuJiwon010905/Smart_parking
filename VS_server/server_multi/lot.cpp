@@ -39,8 +39,8 @@ void buildLot(ParkingLot& lot) {
         .module("A3").module("L3");
     lot.spot("A4").at(0, 3).parking().label("4번 자리")
         .module("A4").module("L4");
-    lot.spot("A5").at(0, 4).parking().label("5번 자리")
-        .module("A5").module("L5");
+    /*lot.spot("A5").at(0, 4).parking().label("5번 자리")
+        .module("A5").module("L5");*/
 
     // Entrance/exit sensors and gates are visible as general areas. They are
     // deliberately not marked parking: approach detection must not consume a
@@ -57,7 +57,7 @@ void buildLot(ParkingLot& lot) {
 // Arduino는 A1~A3/U1/U2를 읽고 ED/XD/L1~L3 명령을 실행할 뿐이다.
 namespace {
 const long long GATE_OPEN_TIMEOUT_MS = 5000;
-const int PARKING_SLOT_COUNT = 5;
+const int PARKING_SLOT_COUNT = 4;
 
 struct ParkingController {
     bool slotKnown[PARKING_SLOT_COUNT];
@@ -108,7 +108,7 @@ int parkingIndex(const std::string& spot) {
     if (spot == "A2") return 1;
     if (spot == "A3") return 2;
     if (spot == "A4") return 3;
-    if (spot == "A5") return 4;
+    //if (spot == "A5") return 4;
     return -1;
 }
 
@@ -332,9 +332,9 @@ void onCmdResult(const CmdResult& r) {
     if (r.module == "XD" && r.value == 1 && g_ctrl.exitActive)  g_ctrl.abortExit = true;
     if (r.module == "ED" && r.value == 2) g_ctrl.retryEntryClose = true;
     if (r.module == "XD" && r.value == 2) g_ctrl.retryExitClose = true;
-    if ((r.module == "L1" || r.module == "L2" || r.module == "L3" || r.module == "L4" || r.module == "L5")
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3" || r.module == "L4")
         && r.value == 0) g_ctrl.retryEntryClose = true;
-    if ((r.module == "L1" || r.module == "L2" || r.module == "L3" || r.module == "L4" || r.module == "L5")
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3" || r.module == "L4")
         && r.value != 0 && g_ctrl.entryActive) g_ctrl.abortEntry = true;
 }
 
