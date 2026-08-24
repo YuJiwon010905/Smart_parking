@@ -26,6 +26,7 @@
 // ① 주차장을 조립한다 — 🔴 **이것만 채우면 돌아간다**       자세히: GUIDE-sample.md §조립
 //
 // 🔑 **배우는 것은 다섯이다**: `spot` · `at` · `parking` · `label` · `module`
+const int PARKING_NUM = 4;
 void buildLot(ParkingLot& lot) {
     // CODEX FIX: use the exact module names registered by
     // client_2.ino. Parking slot IDs A1..A3 are also the names used
@@ -36,7 +37,7 @@ void buildLot(ParkingLot& lot) {
         .module("P1", "A2").module("P1", "L2");
     lot.spot("A3").at(0, 2).parking().label("3번 자리")
         .module("P1", "A3").module("P1", "L3");
-    lot.spot("A4").at(0, 3).parking().label("4번 자리");
+    lot.spot("A4").at(0, 3).parking().label("4번 자리").module("P2", "A4").module("P2", "L4");
     lot.spot("A5").at(0, 4).parking().label("5번 자리");
 
     // Entrance/exit sensors and gates are visible as general areas. They are
@@ -50,6 +51,7 @@ void buildLot(ParkingLot& lot) {
     lot.label("P1", "A1", "1번 주차 감지");
     lot.label("P1", "A2", "2번 주차 감지");
     lot.label("P1", "A3", "3번 주차 감지");
+    lot.label("P2", "A4", "4번 주차 감지");
     lot.label("P1", "U1", "입구 차량 감지");
     lot.label("P1", "U2", "출구 차량 감지");
     lot.label("P1", "ED", "입구 차단기");
@@ -57,6 +59,7 @@ void buildLot(ParkingLot& lot) {
     lot.label("P1", "L1", "1번 안내등");
     lot.label("P1", "L2", "2번 안내등");
     lot.label("P1", "L3", "3번 안내등");
+    lot.label("P2", "L4", "4번 안내등");
 
     // CODEX FIX: ED/XD/L1~L3 are intentionally not exposed as direct web
     // controls. The state machine below is the single actuator decision owner.
@@ -64,12 +67,13 @@ void buildLot(ParkingLot& lot) {
 // CODEX FIX: parking_test.ino의 중앙 판단 상태를 서버로 이동했다.
 // Arduino는 A1~A3/U1/U2를 읽고 ED/XD/L1~L3 명령을 실행할 뿐이다.
 namespace {
-const long long GATE_OPEN_TIMEOUT_MS = 5000;
+    const long long GATE_OPEN_TIMEOUT_MS = 5000;
+
 
 struct ParkingController {
-    bool slotKnown[3];
-    bool occupied[3];
-    bool entryBaseline[3];
+    bool slotKnown[PARKING_NUM];
+    bool occupied[PARKING_NUM];
+    bool entryBaseline[PARKING_NUM];
     bool entranceKnown, entranceDetected;
     bool exitKnown, exitDetected;
 
@@ -100,7 +104,7 @@ struct ParkingController {
           assignedSlot(-1), wrongSlot(-1),
           entryOpenedAt(0), exitOpenedAt(0),
           entryRetryAt(0), exitRetryAt(0) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < PARKING_NUM; i++) {
             slotKnown[i] = false;
             occupied[i] = false;
             entryBaseline[i] = false;
@@ -114,27 +118,28 @@ int parkingIndex(const std::string& module) {
     if (module == "A1") return 0;
     if (module == "A2") return 1;
     if (module == "A3") return 2;
+    if (module == "A4")return 3;
     return -1;
 }
 
 std::string parkingName(int i) {
-    return (i >= 0 && i < 3) ? std::string("A") + char('1' + i) : std::string("??");
+    return (i >= 0 && i < PARKING_NUM) ? std::string("A") + char('1' + i) : std::string("??");
 }
 
 bool allParkingKnown() {
-    return g_ctrl.slotKnown[0] && g_ctrl.slotKnown[1] && g_ctrl.slotKnown[2];
+    return g_ctrl.slotKnown[0] && g_ctrl.slotKnown[1] && g_ctrl.slotKnown[2]&&g_ctrl.slotKnown[3];
 }
 
 int firstFreeParkingSlot(ParkingServer& srv) {
     if (!allParkingKnown()) return -2;       // 아직 안전하게 판단할 자료가 없다
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < PARKING_NUM; i++)
         if (!g_ctrl.occupied[i] && srv.parkingSpotAvailable(parkingName(i))) return i;
     return -1;                               // 만차
 }
 
 int occupiedCount() {
     int n = 0;
-    for (int i = 0; i < 3; i++) if (g_ctrl.occupied[i]) n++;
+    for (int i = 0; i < PARKING_NUM; i++) if (g_ctrl.occupied[i]) n++;
     return n;
 }
 
@@ -189,19 +194,23 @@ void beginEntry(ParkingServer& srv) {
         srv.log("[입차] Arduino 등록 미완료 — 게이트를 열지 않는다");
         return;
     }
+    if (!srv.deviceReady("P2")) {
+        srv.log("[입차] Arduino 등록 미완료 — 게이트를 열지 않는다");
+        return;
+    }
 
     // 세 안내등과 입구 게이트를 같은 하행 창에 묶는다.
     if (!queueEntryBatch(srv, selected, 1)) return;
     g_ctrl.assignedSlot = selected;
     g_ctrl.wrongSlot = -1;
-    for (int i = 0; i < 3; i++) g_ctrl.entryBaseline[i] = g_ctrl.occupied[i];
+    for (int i = 0; i < PARKING_NUM; i++) g_ctrl.entryBaseline[i] = g_ctrl.occupied[i];
     g_ctrl.entryActive = true;
     g_ctrl.entryOpenedAt = srv.nowMs();
     srv.log("[입차] ENTRY_APPROACH → " + parkingName(selected)
             + " 배정 · 안내등 ON · 입구 게이트 OPEN 요청");
 }
 
-void finishEntry(ParkingServer& srv, const std::string& reason) {
+void finishEntry(ParkingServer& srv, const std::string& reason){
     if (!queueEntryBatch(srv, -1, 2)) return;  // LED 모두 OFF + ED CLOSE
     srv.log("[입차] " + reason + " · 안내등 OFF · 입구 게이트 CLOSE 요청");
     clearEntryState();
@@ -251,7 +260,7 @@ void controllerTick(ParkingServer& srv) {
         } else {
             // 배정 당시 이미 차 있던 자리가 비워지면 그 이후의 재점유는
             // 이번 입차 차량의 오주차 후보가 될 수 있다.
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < PARKING_NUM; i++)
                 if (i != g_ctrl.assignedSlot && g_ctrl.entryBaseline[i]
                     && !g_ctrl.occupied[i]) g_ctrl.entryBaseline[i] = false;
 
@@ -263,7 +272,7 @@ void controllerTick(ParkingServer& srv) {
                 g_ctrl.wrongSlot = -1;
             }
             if (g_ctrl.wrongSlot < 0) {
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < PARKING_NUM; i++) {
                     // 배정 전에 이미 차 있던 자리는 오주차 사건이 아니다.
                     if (i != g_ctrl.assignedSlot && !g_ctrl.entryBaseline[i]
                         && g_ctrl.occupied[i]) {
@@ -335,9 +344,9 @@ void onCmdResult(const CmdResult& r) {
     if (r.module == "XD" && r.value == 1 && g_ctrl.exitActive)  g_ctrl.abortExit = true;
     if (r.module == "ED" && r.value == 2) g_ctrl.retryEntryClose = true;
     if (r.module == "XD" && r.value == 2) g_ctrl.retryExitClose = true;
-    if ((r.module == "L1" || r.module == "L2" || r.module == "L3")
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3"||r.module=="L4")
         && r.value == 0) g_ctrl.retryEntryClose = true;
-    if ((r.module == "L1" || r.module == "L2" || r.module == "L3")
+    if ((r.module == "L1" || r.module == "L2" || r.module == "L3" || r.module == "L4")
         && r.value != 0 && g_ctrl.entryActive) g_ctrl.abortEntry = true;
 }
 
@@ -370,7 +379,7 @@ void onOccupancy(ParkingServer& srv, const std::string& spot,
         g_ctrl.slotKnown[i] = true;
         g_ctrl.occupied[i] = occupied;
         srv.log("[주차면] " + parkingName(i) + (occupied ? " OCCUPIED" : " EMPTY")
-                + " · 사용 " + std::to_string(occupiedCount()) + "/3");
+                + " · 사용 " + std::to_string(occupiedCount()) + "/PARKING_NUM");
     } else if (module == "U1") {
         g_ctrl.entranceKnown = true;
         g_ctrl.entranceDetected = occupied;

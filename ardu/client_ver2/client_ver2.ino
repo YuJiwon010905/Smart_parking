@@ -23,9 +23,6 @@
 // 진단 출력 스위치. `#ifndef` 인 이유: **소스를 고치지 않고** DEBUG=0 빌드를 만들 수 있어야
 //   두 빌드의 차이가 DEBUG 하나뿐임이 보장된다. 소스를 고쳐 가며 구우면 그 보장이 깨진다.
 //     arduino-cli compile --build-property "compiler.cpp.extra_flags=-DDEBUG=0" ...
-#ifndef DEBUG
-#define DEBUG 1
-#endif
 
 // ██████████████████████████████████████████████████████████████████████████
 // █  🔴🔴  **이 노드의 이름 — 반드시 자기 것으로 바꿔라**                    █
@@ -37,13 +34,28 @@
 //   증상이 "내 자리가 가끔 사라진다"라 원인을 찾기 매우 어렵다 → `GUIDE.md` §1
 // ⚠ 값을 바꾸면 **다시 구워야** 한다(컴파일 상수다).
 // ██████████████████████████████████████████████████████████████████████████
-#define DEVICE_ID    "P1"        // ← 🔴 **여기를 바꿔라**
+#ifndef NODE_PROFILE
+#define NODE_PROFILE 1
+#endif
+
+#if NODE_PROFILE == 1
+#define DEVICE_ID "P1"
+#elif NODE_PROFILE == 2
+#define DEVICE_ID "P2"
+#elif NODE_PROFILE == 3
+#define DEVICE_ID "P3"
+#else
+#error "지원하지 않는 NODE_PROFILE"
+#endif
+
+#ifndef DEBUG
+#define DEBUG 1
+#endif
 
 // 길이를 컴파일이 막는다 — 주석은 안 읽혀도 이건 못 지나간다.
 //   `sizeof` 는 NUL 을 포함하므로 1~8자 = 2~9 바이트다.
 static_assert(sizeof(DEVICE_ID) > 1 && sizeof(DEVICE_ID) <= 9,
               "DEVICE_ID 는 1~8자여야 한다 (명세 §2.3). 빈 값도 9자 이상도 안 된다");
-
 
 // ██████████████████████████████████████████████████████████████████████████
 // █  🔓  **여기가 네 자리다 — 내 모듈이 하는 일을 여기 쓴다**                █
@@ -174,7 +186,7 @@ static bool cmdExitGate(uint32_t arg){
 //   ⚠ 4m(25,000µs)까지 기다리면 **무응답 슬롯마다 25ms 를 버린다** — 슬롯(1,200ms)의 2%가
 //     측정 12회에서 25%가 된다. 문턱에서 유도하면 7%다.
 //#define US_TIMEOUT_US  ((unsigned long)US_NEAR_CM * 58UL * 2UL)   // 1,160µs
-#define US_TIMEOUT_US 10000UL
+#define US_TIMEOUT_US 20000UL
 #define US_PERIOD_MS   200      // 🔓 재는 간격 (그 사이에는 캐시를 돌려준다)
 
 static bool readUltrasonic1() {
@@ -191,7 +203,7 @@ static bool readUltrasonic1() {
   // 🔴 타임아웃(0)은 **"반사가 없다" = 비었다**로 읽는다. 오류로 읽으면 값이 흔들린다.
 
   // 혹시나 초음파센서 동작 안하면 이 명령어로 값 받아와서 뭐가 문젠지 테스트 가능,,,
-  /*#if DEBUG
+#if DEBUG
   Serial.print(F("[U1] us="));
   Serial.print(us);
   Serial.print(F(" cm="));
@@ -199,7 +211,7 @@ static bool readUltrasonic1() {
   else Serial.print(us / 58.0);
   Serial.print(F(" detected="));
   Serial.println((us != 0) && ((us / 58UL) < US_NEAR_CM));
-#endif*/
+#endif
   
   const bool nearNow = (us != 0) && ((us / 58UL) < US_NEAR_CM);
   return updateStableNear(stable, nearNow);
@@ -230,7 +242,7 @@ static bool readUltrasonic2() {
   const uint32_t us = pulseIn(US2_ECHO, HIGH, US_TIMEOUT_US);
 
 // 출구 초음파 정상동작 테스트 코드
-/*#if DEBUG
+#if DEBUG
   Serial.print(F("[U2] us="));
   Serial.print(us);
   Serial.print(F(" cm="));
@@ -238,7 +250,7 @@ static bool readUltrasonic2() {
   else Serial.print(us / 58.0);
   Serial.print(F(" detected="));
   Serial.println((us != 0) && ((us / 58UL) < US_NEAR_CM));
-#endif*/
+#endif
   const bool nearNow = (us != 0) && ((us / 58UL) < US_NEAR_CM);
   return updateStableNear(stable, nearNow);
 }
@@ -360,7 +372,8 @@ void setup() {
   node.begin();
 
   // 🔓 **내 핀 — 아두이노 기본 설정.** 장치는 어느 모듈이 어느 핀인지 모른다
-  pinMode(IR_1,INPUT_PULLUP);  pinMode(IR_2, INPUT_PULLUP);  pinMode(IR_3, INPUT_PULLUP);
+  //pinMode(IR_1,INPUT_PULLUP);  pinMode(IR_2, INPUT_PULLUP);  pinMode(IR_3, INPUT_PULLUP);
+  pinMode(IR_1,INPUT);  pinMode(IR_2, INPUT);  pinMode(IR_3, INPUT);
 
   pinMode(US1_TRIG, OUTPUT);   pinMode(US1_ECHO, INPUT);
   pinMode(US2_TRIG, OUTPUT);   pinMode(US2_ECHO, INPUT);

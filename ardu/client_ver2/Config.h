@@ -25,7 +25,7 @@ SoftwareSerial wifi(PIN_ESP_RX, PIN_ESP_TX);
 //    그래서 ESP 가 IP 리터럴로 못 읽고 **호스트명으로 해석해 `DNS Fail`** 을 냈다.
 //    (기기 플래시를 읽어 확인한 실물 문자열: AT+CIPSTART="TCP"," 192.168.35.21",9991)
 //    이 매크로는 그대로 AT 명령에 이어붙으므로 공백 하나가 곧 고장이다.
-#define SERVER_IP    "192.168.0.81"  // 🔓 서버를 돌리는 기계의 주소. `ipconfig getifaddr en0` 로 확인한다
+#define SERVER_IP    "192.168.0.82"  // 🔓 서버를 돌리는 기계의 주소. `ipconfig getifaddr en0` 로 확인한다
                                       //   ⚠ 망을 옮기면 서브넷째로 바뀐다. **현장에서 다시 잰다**
 // 🔓 **기여자용 기본값은 dev 서버(9991)다. 이 파일에는 이 값 하나만 있다.**
 //
